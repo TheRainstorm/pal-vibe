@@ -1,0 +1,5 @@
+*.yaml
+.venv/
+tmp/
+links/
+medialib
