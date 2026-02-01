@@ -313,35 +313,103 @@ def _extract_metadata_from_llm(filename, v_type, api_key, api_base, model_name):
     """
     client = OpenAI(api_key=api_key, base_url=api_base)
     
-    prompt = f"Extract video metadata from the filename: '{filename}'. "
-    prompt += "Identify the title, year (if any), type (Movie, TV), season number (if TV), episode number (if TV), and episode title (if TV). "
-    prompt += f"The expected primary type is {'TV series' if v_type == 0 else 'movie'}. "
-    prompt += "Respond in a JSON format with keys: title, year, type, season, episode, ep_title. "
-    prompt += "Use null for missing optional fields."
+    def clean_json_string(s):
+        """
+        清洗模型输出，提取 ```json ... ``` 中的内容，或者尝试修复常见错误
+        """
+        # 1. 尝试提取 Markdown 代码块中的 JSON
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", s, re.DOTALL)
+        if match:
+            return match.group(1)
+        
+        # 2. 如果没有代码块，尝试寻找最外层的 {}
+        match = re.search(r"\{.*\}", s, re.DOTALL)
+        if match:
+            return match.group(0)
+            
+        return s
+
+    expected_type = 'TV Series' if v_type == 0 else 'Movie'
+
+    # --- 1. 优化 Prompt (增加 Few-Shot 示例) ---
+    system_instruction = (
+        "You are a strict video metadata extractor. "
+        "Output valid JSON only. No explanation, no markdown keys."
+    )
+
+    # 构建带示例的 Prompt，小模型模仿能力比理解能力强
+    prompt = f"""
+    Task: Extract metadata from the filename into JSON.
+    Expected Type Hint: {expected_type}
+
+    Examples:
+    Input: "The.Matrix.1999.BluRay.mkv"
+    Output: {{"title": "The Matrix", "year": "1999", "type": "Movie", "season": null, "episode": null, "ep_title": null}}
+
+    Input: "Friends.S01E02.The.One.With.The.Sonogram.mkv"
+    Output: {{"title": "Friends", "year": null, "type": "TV", "season": 1, "episode": 2, "ep_title": "The One With The Sonogram"}}
+
+    Input: "{filename}"
+    Output:
+    """
+
+    metadata = {}
 
     try:
         chat_completion = client.chat.completions.create(
             model=model_name,
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"}
+            messages=[
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1 # 降低随机性，让小模型更稳定
         )
+        
         response_content = chat_completion.choices[0].message.content
-        llm_metadata = json.loads(response_content)
-        print(f'{llm_metadata=}')
+        print(f'Raw LLM Response: {response_content}')
 
-        # Map LLM output to our internal metadata structure
+        # --- 2. 清洗数据 ---
+        cleaned_content = clean_json_string(response_content)
+
+        # --- 3. 解析与错误处理 ---
+        llm_metadata = json.loads(cleaned_content)
+        
+        # 映射数据（增加安全 get）
         metadata = {
-            "title": llm_metadata.get("title"),
+            "title": llm_metadata.get("title", filename), # 如果提取不到标题，用文件名兜底
             "year": str(llm_metadata.get("year")) if llm_metadata.get("year") else None,
-            "type": llm_metadata.get("type"),
-            "season": llm_metadata.get("season", 1),
+            "type": llm_metadata.get("type", "Movie" if v_type == 1 else "TV"),
+            "season": llm_metadata.get("season", 1 if v_type == 0 else None),
             "episode": llm_metadata.get("episode"),
             "ep_title": llm_metadata.get("ep_title"),
         }
-        return metadata
+        
+        print(f"Parsed Metadata: {metadata}")
+
+    except json.JSONDecodeError as e:
+        print(f"JSON Parsing Failed: {e}. Content was: {response_content}")
+        # 兜底逻辑：解析失败时，至少保留文件名
+        metadata = {
+            "title": filename,
+            "year": None,
+            "type": expected_type,
+            "season": 1,
+            "episode": 1,
+            "ep_title": None
+        }
+
     except Exception as e:
-        print(f"Error extracting metadata with LLM for {filename}: {e}")
-        return None
+        print(f"An unexpected error occurred: {e}")
+        # 同样的兜底逻辑
+        metadata = {
+            "title": filename, 
+            "year": None,
+            "type": expected_type, 
+            "season": None, 
+            "episode": None, 
+            "ep_title": None
+        }
+    return metadata
 
 # New helper function to get only filename-derived metadata (without ffmpeg info)
 def _get_filename_derived_metadata(fpath, v_type, use_llm=False, llm_api_key=None, llm_api_base=None, llm_model=None):
