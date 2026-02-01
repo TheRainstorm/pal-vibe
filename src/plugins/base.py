@@ -5,6 +5,9 @@ from guessit import guessit
 from openai import OpenAI
 from src.metadata import get_video_info_ffmpeg
 from src.link_manager import create_link, remove_link_and_empty_dirs
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 class BaseVideoPlugin:
     def __init__(self, db, args):
@@ -15,9 +18,6 @@ class BaseVideoPlugin:
         raise NotImplementedError
 
     def extract_filename_metadata(self, filepath):
-        """
-        Extracts metadata using the configured processing chain.
-        """
         filename = os.path.basename(filepath)
         chain = getattr(self.args, 'chain', ['guessit'])
         providers = getattr(self.args, 'providers', {})
@@ -27,22 +27,22 @@ class BaseVideoPlugin:
             metadata = None
             
             if processor_name == 'guessit':
-                # print(f"Trying GuessIt for {filename}...")
+                logger.debug(f"Extracting metadata using GuessIt for: {filename}")
                 metadata = self._extract_guessit(filename)
             elif processor_name in providers:
-                # print(f"Trying Provider '{processor_name}' for {filename}...")
+                logger.debug(f"Extracting metadata using Provider '{processor_name}' for: {filename}")
                 provider_config = providers[processor_name]
                 if provider_config.get("type") == "llm":
                     metadata = self._extract_llm(filename, provider_config)
             else:
-                print(f"Warning: Unknown processor '{processor_name}' in chain.")
+                logger.warning(f"Unknown processor '{processor_name}' in chain.")
 
-            # Validate
             is_valid, _ = self._validate_metadata(metadata)
             if is_valid:
+                logger.debug(f"Successfully extracted metadata with {processor_name}: {metadata}")
                 return metadata
         
-        # If all failed, return the last result (or empty) to propagate error reason
+        logger.warning(f"All processors failed to extract valid metadata for: {filename}")
         return metadata if metadata else {}
 
     def _extract_guessit(self, filename):
@@ -56,7 +56,7 @@ class BaseVideoPlugin:
         model = config.get("model", "gpt-3.5-turbo")
         
         if not api_key:
-            print("Error: Missing api_key for LLM provider.")
+            logger.error("Missing api_key for LLM provider.")
             return None
 
         client = OpenAI(api_key=api_key, base_url=api_base)
@@ -75,7 +75,7 @@ class BaseVideoPlugin:
             
             return json.loads(content)
         except Exception as e:
-            print(f"LLM Error: {e}")
+            logger.error(f"LLM Error: {e}")
             return None
 
     def _get_guessit_options(self):
@@ -113,51 +113,58 @@ class BaseVideoPlugin:
                 if db_entry.get("error"):
                     is_valid, error_reason = self._validate_metadata(final_metadata)
                     if not is_valid: return 
-                    print(f"File {filepath} previously had error but now seems valid. Retrying.")
+                    logger.info(f"File previously had error but now seems valid. Retrying: {filepath}")
                 else:
                     target_path = self.generate_target_path(final_metadata, filepath)
                     if not target_path: return 
 
                     if not os.path.lexists(target_path):
+                        logger.info(f"Link missing, recreating: {target_path}")
                         create_link(filepath, target_path, soft_link)
                     
                     if db_entry.get("source_root") != source_root:
+                         logger.debug(f"Updating source_root for {filepath}")
                          self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, target_path, current_db_hash, error=None)
+                    
+                    logger.debug(f"No change detected for: {filepath}")
                     return 
 
             else:
-                print(f"Metadata changed for {filepath} (corrected by human), re-processing.")
+                logger.info(f"Metadata changed (corrected by human), re-processing: {filepath}")
                 is_valid, error_reason = self._validate_metadata(final_metadata)
                 
                 if not is_valid:
-                    print(f"User edit for {filepath} is still invalid: {error_reason}")
+                    logger.warning(f"User edit is still invalid: {error_reason}")
                     self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_db_hash, error=error_reason)
                     return
 
                 target_path = self.generate_target_path(final_metadata, filepath)
                 if not target_path:
+                    logger.error(f"Cannot generate target path for {filepath}")
                     self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_db_hash, error="Cannot generate target path")
                     return
 
                 existing_owner = self.db.get_file_by_target_path(target_path)
                 if existing_owner and existing_owner != filepath:
-                    print(f"Target path conflict for {filepath}. Already used by {existing_owner}.")
+                    logger.error(f"Target path conflict: {target_path} used by {existing_owner}")
                     self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_db_hash, error=f"Target path conflict with {existing_owner}")
                     return
 
                 old_target_path = db_entry.get("target_path")
                 if target_path and target_path != old_target_path:
-                     print(f"Target path changed for {filepath}. Relinking.")
+                     logger.info(f"Target path changed. Relinking to: {target_path}")
                      if old_target_path:
                         remove_link_and_empty_dirs(old_target_path)
                      create_link(filepath, target_path, soft_link)
                 elif not os.path.lexists(target_path):
+                     logger.info(f"Link missing, creating: {target_path}")
                      create_link(filepath, target_path, soft_link)
                 
                 self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, target_path, current_db_hash, error=None)
                 return 
 
         # Step 2: New File
+        logger.info(f"New file found: {filepath}")
         filename_metadata = self.extract_filename_metadata(filepath)
         current_hash = self.calculate_hash(filename_metadata)
         final_metadata = filename_metadata.copy()
@@ -166,12 +173,12 @@ class BaseVideoPlugin:
         is_valid, error_reason = self._validate_metadata(filename_metadata)
         
         if not is_valid:
-            print(f"Failed to validate metadata for {filepath}: {error_reason}. Saving error state.")
+            logger.warning(f"Invalid metadata for {filepath}: {error_reason}")
             self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_hash, error=error_reason)
             return
 
         # Step 4: FFmpeg scan
-        print(f"Scanning technical info for {filepath}...")
+        logger.info(f"Scanning technical info...")
         ffmpeg_info = get_video_info_ffmpeg(filepath)
         final_metadata.update(ffmpeg_info)
 
@@ -181,12 +188,12 @@ class BaseVideoPlugin:
         if target_path:
             existing_owner = self.db.get_file_by_target_path(target_path)
             if existing_owner and existing_owner != filepath:
-                print(f"Target path conflict for {filepath}. Already used by {existing_owner}.")
+                logger.error(f"Target path conflict: {target_path} used by {existing_owner}")
                 self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_hash, error=f"Target path conflict with {existing_owner}")
                 return
 
             create_link(filepath, target_path, soft_link)
             self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, target_path, current_hash, error=None)
         else:
-            print(f"Could not generate target path for {filepath}")
+            logger.error(f"Could not generate target path for {filepath}")
             self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_hash, error="Could not generate target path")
