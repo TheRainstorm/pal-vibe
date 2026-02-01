@@ -1,57 +1,68 @@
 import os
 import argparse
+import yaml
 from src.database import VideoDatabase
 from src.metadata import scan_video_files
 from src.link_manager import remove_link_and_empty_dirs
 from src.plugins import MoviePlugin, TVPlugin, WebDLPlugin
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Scan and link video files for Jellyfin.")
-    parser.add_argument("-s", "--src", required=True, help="Source directory to scan video files.")
-    parser.add_argument("-d", "--dst", required=True, help="Destination directory for linked files.")
-    parser.add_argument("-t", "--type", type=int, choices=[0, 1, 2], required=True,
-                        help="Type of video: 0 for TV, 1 for Movie, 2 for WebDL.")
-    parser.add_argument("-S", "--soft-link", action="store_true",
-                        help="Create soft links instead of hard links.")
-    parser.add_argument("--movie-folder", default="Movie",
-                        help="Subfolder name for movies within the destination directory (default: Movie).")
-    parser.add_argument("--tv-folder", default="TV",
-                        help="Subfolder name for TV series within the destination directory (default: TV).")
-    parser.add_argument("--db", default="pal_database.yaml",
-                        help="Path to the YAML database file (default: pal_database.yaml).")
-    # LLM arguments
-    parser.add_argument("--use-llm", action="store_true",
-                        help="Use an LLM (OpenAI compatible API) for metadata extraction.")
-    parser.add_argument("--llm-api-key", help="API key for the LLM service. Required if --use-llm is true.")
-    parser.add_argument("--llm-api-base", default="https://api.openai.com/v1",
-                        help="Base URL for the OpenAI-compatible API (default: https://api.openai.com/v1).")
-    parser.add_argument("--llm-model", default="gpt-3.5-turbo",
-                        help="Model name to use for LLM metadata extraction (default: gpt-3.5-turbo).")
+class TaskConfig:
+    """Helper class to convert dictionary to object with attributes, mimicking argparse.Namespace"""
+    def __init__(self, **entries):
+        self.__dict__.update(entries)
 
-    args = parser.parse_args()
+def get_db_instance(db_path, db_cache):
+    if db_path not in db_cache:
+        db_cache[db_path] = VideoDatabase(db_path)
+    return db_cache[db_path]
 
-    if args.use_llm and not args.llm_api_key:
-        parser.error("--llm-api-key is required when --use-llm is enabled.")
+def run_task(task_config, db_cache):
+    # Ensure critical fields exist
+    if not task_config.get("src") or not task_config.get("dst") or not task_config.get("type"):
+        print(f"Skipping invalid task config: {task_config}")
+        return
 
-    db = VideoDatabase(args.db)
+    # Determine DB path
+    db_path = task_config.get("db", "pal_database.yaml")
+    db = get_db_instance(db_path, db_cache)
+
+    # Convert config dict to object for Plugins
+    args = TaskConfig(**task_config)
 
     # Select Plugin
-    plugin_map = {
-        0: TVPlugin,
-        1: MoviePlugin,
-        2: WebDLPlugin
+    # Support both int (legacy) and string types
+    type_map = {
+        0: TVPlugin, "tv": TVPlugin,
+        1: MoviePlugin, "movie": MoviePlugin,
+        2: WebDLPlugin, "webdl": WebDLPlugin
     }
-    PluginClass = plugin_map.get(args.type)
+    
+    # Handle type being case-insensitive string
+    task_type = task_config["type"]
+    if isinstance(task_type, str):
+        task_type = task_type.lower()
+        
+    PluginClass = type_map.get(task_type)
+    if not PluginClass:
+        print(f"Unknown type: {task_type}")
+        return
+
     plugin = PluginClass(db, args)
+    source_root = task_config["src"]
 
-    print(f"Scanning for video files in {args.src} with type {plugin.get_type_name()}...")
-    found_files = scan_video_files(args.src)
+    print(f"--- Running Task ---")
+    print(f"Source: {source_root}")
+    print(f"Type: {plugin.get_type_name()}")
+    print(f"Database: {db_path}")
 
-    # Core Demand 3: Check for orphaned links and remove them
-    # Clean up DB for removed files
+    found_files = scan_video_files(source_root)
     current_files_set = set(found_files)
-    stored_files = db.get_all_files()
-    for stored_file in stored_files:
+
+    # Cleanup: Only check files belonging to this source_root
+    # This prevents deleting links from other tasks sharing the same DB
+    stored_files_in_root = db.get_files_by_source_root(source_root)
+    
+    for stored_file in stored_files_in_root:
         if stored_file not in current_files_set and not os.path.exists(stored_file):
             print(f"File removed: {stored_file}, cleaning up...")
             entry = db.get_video_entry(stored_file)
@@ -63,4 +74,60 @@ if __name__ == "__main__":
         print("No video files found.")
 
     for filepath in found_files:
-        plugin.process_file(filepath)
+        plugin.process_file(filepath, source_root)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Scan and link video files for Jellyfin.")
+    
+    # Mode selection
+    parser.add_argument("-c", "--config", help="Path to YAML configuration file.")
+    
+    # Single task arguments (Legacy/Direct mode)
+    parser.add_argument("-s", "--src", help="Source directory to scan video files.")
+    parser.add_argument("-d", "--dst", help="Destination directory for linked files.")
+    parser.add_argument("-t", "--type", help="Type of video: 0/tv, 1/movie, 2/webdl.")
+    parser.add_argument("-S", "--soft-link", action="store_true", help="Create soft links.")
+    parser.add_argument("--movie-folder", default="Movie", help="Subfolder for movies.")
+    parser.add_argument("--tv-folder", default="TV", help="Subfolder for TV series.")
+    parser.add_argument("--db", default="pal_database.yaml", help="Database file path.")
+    
+    # LLM arguments
+    parser.add_argument("--use-llm", action="store_true", help="Use LLM for metadata.")
+    parser.add_argument("--llm-api-key", help="API key for LLM.")
+    parser.add_argument("--llm-api-base", default="https://api.openai.com/v1", help="LLM API Base URL.")
+    parser.add_argument("--llm-model", default="gpt-3.5-turbo", help="LLM Model name.")
+
+    args = parser.parse_args()
+    
+    db_cache = {}
+
+    if args.config:
+        if not os.path.exists(args.config):
+            print(f"Config file not found: {args.config}")
+            exit(1)
+            
+        with open(args.config, 'r') as f:
+            config = yaml.safe_load(f)
+            
+        defaults = config.get("defaults", {})
+        tasks = config.get("tasks", [])
+        
+        for task in tasks:
+            # Merge defaults with task config
+            merged_task = defaults.copy()
+            merged_task.update(task)
+            run_task(merged_task, db_cache)
+            
+    else:
+        # Run in single task mode using CLI args
+        if not args.src or not args.dst or not args.type:
+            parser.error("src, dst, and type are required unless -c/--config is used.")
+            
+        # Convert args namespace to dict for consistency
+        task_config = vars(args)
+        
+        # Handle type conversion if it's a digit string
+        if isinstance(task_config["type"], str) and task_config["type"].isdigit():
+            task_config["type"] = int(task_config["type"])
+            
+        run_task(task_config, db_cache)

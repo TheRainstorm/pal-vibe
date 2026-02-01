@@ -24,8 +24,9 @@ class VideoDatabase:
     def get_video_entry(self, src_filepath):
         return self.data["files"].get(src_filepath)
 
-    def update_video_entry(self, src_filepath, metadata, target_path, metadata_hash):
+    def update_video_entry(self, src_filepath, metadata, target_path, metadata_hash, source_root):
         self.data["files"][src_filepath] = {
+            "source_root": source_root,
             "metadata": metadata,
             "target_path": target_path,
             "metadata_hash": metadata_hash
@@ -52,3 +53,12 @@ class VideoDatabase:
 
     def get_all_files(self):
         return list(self.data["files"].keys())
+
+    def get_files_by_source_root(self, source_root):
+        """
+        Returns a list of filepaths that belong to the given source_root.
+        """
+        return [
+            fpath for fpath, data in self.data["files"].items() 
+            if data.get("source_root") == source_root
+        ]
