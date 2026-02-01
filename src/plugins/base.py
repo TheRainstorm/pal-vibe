@@ -1,0 +1,144 @@
+import os
+import json
+import hashlib
+from guessit import guessit
+from openai import OpenAI
+from src.metadata import get_video_info_ffmpeg
+from src.link_manager import create_link, remove_link_and_empty_dirs
+
+class BaseVideoPlugin:
+    def __init__(self, db, args):
+        self.db = db
+        self.args = args
+
+    def get_type_name(self):
+        raise NotImplementedError
+
+    def extract_filename_metadata(self, filepath):
+        """
+        Extracts metadata purely from the filename (using GuessIt or LLM).
+        Must return a dictionary.
+        """
+        filename = os.path.basename(filepath)
+        if self.args.use_llm:
+            metadata = self._extract_llm(filename)
+            if self._validate_metadata(metadata):
+                return metadata
+            print(f"LLM extraction failed or invalid for {filename}. Falling back to GuessIt.")
+        
+        return self._extract_guessit(filename)
+
+    def _extract_guessit(self, filename):
+        # Default implementation, can be overridden
+        options = self._get_guessit_options()
+        guess = guessit(filename, options=options)
+        return self._map_guessit_to_metadata(guess)
+
+    def _extract_llm(self, filename):
+        client = OpenAI(api_key=self.args.llm_api_key, base_url=self.args.llm_api_base)
+        prompt = self._get_llm_prompt(filename)
+        try:
+            chat_completion = client.chat.completions.create(
+                model=self.args.llm_model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "text"}
+            )
+            return json.loads(chat_completion.choices[0].message.content)
+        except Exception as e:
+            print(f"LLM Error: {e}")
+            return None
+
+    def _get_guessit_options(self):
+        return {}
+
+    def _get_llm_prompt(self, filename):
+        return f"Extract metadata from '{filename}' as JSON."
+
+    def _map_guessit_to_metadata(self, guess):
+        return dict(guess)
+
+    def _validate_metadata(self, metadata):
+        return metadata and metadata.get("title")
+
+    def generate_target_path(self, metadata, filepath):
+        raise NotImplementedError
+
+    def calculate_hash(self, metadata):
+        # Calculate hash based on filename-derived fields only
+        # Subclasses should define which fields are important
+        stable_json = json.dumps(metadata, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(stable_json.encode('utf-8')).hexdigest()
+
+    def process_file(self, filepath):
+        # Feat 1: Skip if in error list
+        if self.db.is_error_file(filepath):
+            # Check if file still exists, if not, clean up error list
+            if not os.path.exists(filepath):
+                self.db.data["error_files"].remove(filepath)
+                self.db._save_database()
+            return
+
+        db_entry = self.db.get_video_entry(filepath)
+        
+        # Step 1: Check against DB
+        if db_entry:
+            final_metadata = db_entry["metadata"]
+            if db_entry["metadata_hash"] == self.calculate_hash(final_metadata):
+                print(f"No change detected for {filepath}. Skipping.")
+
+                # Ensure link exists
+                target_path = self.generate_target_path(final_metadata, filepath)
+                if not os.path.exists(db_entry.get("target_path", "")):
+                    # Link missing? Recreate
+                    create_link(filepath, target_path, self.args.soft_link)
+                    self.db.update_video_entry(filepath, final_metadata, target_path, db_entry["metadata_hash"])
+                return
+            else:
+                print(f"Metadata changed for {filepath} (corrected by human), re-linking.")
+                
+                # Check if target path needs update
+                target_path = self.generate_target_path(final_metadata, filepath)
+                if target_path and target_path != db_entry.get("target_path"):
+                     print(f"Target path changed for {filepath}. Relinking.")
+                     remove_link_and_empty_dirs(db_entry.get("target_path"))
+                     create_link(filepath, target_path, self.args.soft_link)
+                elif not os.path.exists(db_entry.get("target_path", "")):
+                     # Link missing? Recreate
+                     if target_path:
+                        create_link(filepath, target_path, self.args.soft_link)
+                
+                # update metadata
+                self.db.update_video_entry(filepath, final_metadata, target_path, current_hash)
+                return # Done for this file
+        
+        # Step 2: Extract filename metadata
+        filename_metadata = self.extract_filename_metadata(filepath)
+
+        # Check if valid
+        if not self._validate_metadata(filename_metadata):
+            print(f"Failed to extract metadata for {filepath}. Adding to error list.")
+            self.db.add_error_file(filepath)
+            return
+
+        # Calculate hash of filename metadata
+        current_hash = self.calculate_hash(filename_metadata)
+        final_metadata = filename_metadata.copy()
+    
+        # Step 3: FFmpeg scan (Only if new or changed)
+        print(f"Scanning technical info for {filepath}...")
+        # ffmpeg_info = get_video_info_ffmpeg(filepath)
+        ffmpeg_info = {}
+        final_metadata.update(ffmpeg_info)
+
+        # Step 4: Generate Link
+        target_path = self.generate_target_path(final_metadata, filepath)
+        
+        if target_path:
+            if db_entry and db_entry.get("target_path") and db_entry["target_path"] != target_path:
+                remove_link_and_empty_dirs(db_entry["target_path"])
+            
+            create_link(filepath, target_path, self.args.soft_link)
+            self.db.update_video_entry(filepath, final_metadata, target_path, current_hash)
+        else:
+            print(f"Could not generate target path for {filepath}")
+            self.db.add_error_file(filepath)
