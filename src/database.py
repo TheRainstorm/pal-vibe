@@ -9,13 +9,9 @@ class VideoDatabase:
         if "files" not in self.data:
             self.data["files"] = {}
         
-        # Migrate old error_files list to dict if necessary
-        if "error_files" not in self.data:
-            self.data["error_files"] = {}
-        elif isinstance(self.data["error_files"], list):
-            # Migration: convert list to dict with default reason
-            old_list = self.data["error_files"]
-            self.data["error_files"] = {path: "Unknown error (migrated)" for path in old_list}
+        # Clean up legacy error_files if it exists
+        if "error_files" in self.data:
+            del self.data["error_files"]
 
     def _load_database(self):
         if os.path.exists(self.db_path):
@@ -30,16 +26,17 @@ class VideoDatabase:
     def get_video_entry(self, src_filepath):
         return self.data["files"].get(src_filepath)
 
-    def update_video_entry(self, src_filepath, metadata, target_path, metadata_hash, source_root):
-        self.data["files"][src_filepath] = {
+    def update_video_entry(self, src_filepath, metadata, target_path, metadata_hash, source_root, error=None):
+        entry = {
             "source_root": source_root,
             "metadata": metadata,
             "target_path": target_path,
             "metadata_hash": metadata_hash
         }
-        # If it was in error list, remove it
-        if src_filepath in self.data["error_files"]:
-            del self.data["error_files"][src_filepath]
+        if error:
+            entry["error"] = error
+        
+        self.data["files"][src_filepath] = entry
         self._save_database()
 
     def remove_entry(self, src_filepath):
@@ -48,13 +45,6 @@ class VideoDatabase:
             self._save_database()
             return True
         return False
-
-    def add_error_file(self, src_filepath, reason="Unknown error"):
-        self.data["error_files"][src_filepath] = reason
-        self._save_database()
-
-    def is_error_file(self, src_filepath):
-        return src_filepath in self.data["error_files"]
 
     def get_all_files(self):
         return list(self.data["files"].keys())

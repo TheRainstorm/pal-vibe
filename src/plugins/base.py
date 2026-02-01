@@ -25,9 +25,10 @@ class BaseVideoPlugin:
         
         if use_llm:
             metadata = self._extract_llm(filename)
-            if self._validate_metadata(metadata):
+            # Basic validation: check if metadata isn't None
+            if metadata: 
                 return metadata
-            print(f"LLM extraction failed or invalid for {filename}. Falling back to GuessIt.")
+            print(f"LLM extraction failed for {filename}. Falling back to GuessIt.")
         
         return self._extract_guessit(filename)
 
@@ -87,14 +88,6 @@ class BaseVideoPlugin:
         return hashlib.sha256(stable_json.encode('utf-8')).hexdigest()
 
     def process_file(self, filepath, source_root):
-        # Feat 1: Skip if in error list
-        if self.db.is_error_file(filepath):
-            # Check if file still exists, if not, clean up error list
-            if not os.path.exists(filepath):
-                 del self.db.data["error_files"][filepath]
-                 self.db._save_database()
-            return
-
         db_entry = self.db.get_video_entry(filepath)
         soft_link = getattr(self.args, 'soft_link', True)
         
@@ -106,88 +99,94 @@ class BaseVideoPlugin:
             # This detects if the user manually edited the DB file
             current_db_hash = self.calculate_hash(final_metadata)
             
-            if db_entry["metadata_hash"] == current_db_hash:
-                # No manual changes in DB, and file exists in DB.
-                # We assume the data is correct and valid.
-                # Just ensure the link exists.
-                target_path = self.generate_target_path(final_metadata, filepath)
-                if not target_path:
-                     print(f"Skipping {filepath}: Cannot generate target path from cached metadata.")
-                     return
+            if db_entry.get("metadata_hash") == current_db_hash:
+                # No manual changes in DB.
+                # Check if it was previously an error
+                if db_entry.get("error"):
+                    # It was an error, and user hasn't touched it. 
+                    # We could retry logic here if we wanted to be robust, 
+                    # but for now, we just skip it as per "user hasn't fixed it"
+                    # UNLESS the logic code changed? No, assuming code stable.
+                    # Actually, let's re-validate just in case our code changed logic.
+                    is_valid, error_reason = self._validate_metadata(final_metadata)
+                    if not is_valid:
+                        # Still invalid
+                        return 
+                    
+                    # If it became valid (e.g. code update), we proceed to re-link below.
+                    print(f"File {filepath} previously had error but now seems valid. Retrying.")
+                else:
+                    # Valid file, unchanged. Just ensure link exists.
+                    target_path = self.generate_target_path(final_metadata, filepath)
+                    if not target_path: return # Should not happen for valid files
 
-                # Check for conflict (Target path collision)
-                existing_owner = self.db.get_file_by_target_path(target_path)
-                if existing_owner and existing_owner != filepath:
-                    print(f"Target path conflict for {filepath}. Already used by {existing_owner}.")
-                    self.db.add_error_file(filepath, f"Target path conflict with {existing_owner}")
-                    return
+                    if not os.path.exists(db_entry.get("target_path", "")):
+                        create_link(filepath, target_path, soft_link)
+                    
+                    # Migration check
+                    if db_entry.get("source_root") != source_root:
+                         self.db.update_video_entry(filepath, final_metadata, target_path, current_db_hash, source_root)
+                    return 
 
-                if not os.path.exists(db_entry.get("target_path", "")):
-                    # Link missing? Recreate
-                    create_link(filepath, target_path, soft_link)
-                
-                # Check if we need to update source_root if it was missing or different (migration scenario)
-                if db_entry.get("source_root") != source_root:
-                     self.db.update_video_entry(filepath, final_metadata, target_path, current_db_hash, source_root)
-
-                return # Done for this file
             else:
                 # User manually edited the DB metadata
-                print(f"Metadata changed for {filepath} (corrected by human), re-linking.")
+                print(f"Metadata changed for {filepath} (corrected by human), re-processing.")
+                # We trust the user's data. 
+                # Check if it's now valid
+                is_valid, error_reason = self._validate_metadata(final_metadata)
                 
-                # Re-generate target path with user-corrected metadata
-                target_path = self.generate_target_path(final_metadata, filepath)
-                
-                if not target_path:
-                    print(f"Failed to generate target path for {filepath} using updated metadata.")
-                    # Keep DB entry as is, but maybe user made a mistake? 
-                    # We don't move to error list immediately if it was already in valid files list, 
-                    # but maybe we should print a warning.
+                if not is_valid:
+                    print(f"User edit for {filepath} is still invalid: {error_reason}")
+                    self.db.update_video_entry(filepath, final_metadata, None, current_db_hash, source_root, error=error_reason)
                     return
 
-                # Check for conflict
+                # Valid now!
+                target_path = self.generate_target_path(final_metadata, filepath)
+                if not target_path:
+                    self.db.update_video_entry(filepath, final_metadata, None, current_db_hash, source_root, error="Cannot generate target path")
+                    return
+
+                # Check conflict
                 existing_owner = self.db.get_file_by_target_path(target_path)
                 if existing_owner and existing_owner != filepath:
                     print(f"Target path conflict for {filepath}. Already used by {existing_owner}.")
-                    # If conflict, we cannot link. Move to error list? Or just skip?
-                    # Since user manually edited this, let's treat it as an error so they see it.
-                    self.db.add_error_file(filepath, f"Target path conflict with {existing_owner}")
+                    self.db.update_video_entry(filepath, final_metadata, None, current_db_hash, source_root, error=f"Target path conflict with {existing_owner}")
                     return
 
+                # Re-link
                 if target_path and target_path != db_entry.get("target_path"):
                      print(f"Target path changed for {filepath}. Relinking.")
                      remove_link_and_empty_dirs(db_entry.get("target_path"))
                      create_link(filepath, target_path, soft_link)
                 elif not os.path.exists(db_entry.get("target_path", "")):
-                     # Link missing? Recreate
-                     if target_path:
-                        create_link(filepath, target_path, soft_link)
+                     create_link(filepath, target_path, soft_link)
                 
-                # Update DB with new hash so we don't trigger this again next time
-                self.db.update_video_entry(filepath, final_metadata, target_path, current_db_hash, source_root)
-                return # Done for this file
+                # Update DB, clear error
+                self.db.update_video_entry(filepath, final_metadata, target_path, current_db_hash, source_root, error=None)
+                return 
 
         # Step 2: New File - Extract filename metadata
         filename_metadata = self.extract_filename_metadata(filepath)
         
-        # Check if valid
+        # Calculate hash of filename metadata immediately
+        current_hash = self.calculate_hash(filename_metadata)
+        final_metadata = filename_metadata.copy()
+
+        # Step 3: Check validation
         is_valid, error_reason = self._validate_metadata(filename_metadata)
+        
         if not is_valid:
-            print(f"Failed to extract metadata for {filepath}: {error_reason}. Adding to error list.")
-            self.db.add_error_file(filepath, error_reason)
+            print(f"Failed to validate metadata for {filepath}: {error_reason}. Saving error state.")
+            # Save incomplete metadata to DB with error flag
+            self.db.update_video_entry(filepath, final_metadata, None, current_hash, source_root, error=error_reason)
             return
 
-        # Calculate hash of filename metadata
-        current_hash = self.calculate_hash(filename_metadata)
-        
-        final_metadata = filename_metadata.copy()
-        
-        # Step 3: FFmpeg scan (Only for new files)
+        # Step 4: FFmpeg scan (Only for valid new files)
         print(f"Scanning technical info for {filepath}...")
         ffmpeg_info = get_video_info_ffmpeg(filepath)
         final_metadata.update(ffmpeg_info)
 
-        # Step 4: Generate Link
+        # Step 5: Generate Link
         target_path = self.generate_target_path(final_metadata, filepath)
         
         if target_path:
@@ -195,15 +194,11 @@ class BaseVideoPlugin:
             existing_owner = self.db.get_file_by_target_path(target_path)
             if existing_owner and existing_owner != filepath:
                 print(f"Target path conflict for {filepath}. Already used by {existing_owner}.")
-                self.db.add_error_file(filepath, f"Target path conflict with {existing_owner}")
+                self.db.update_video_entry(filepath, final_metadata, None, current_hash, source_root, error=f"Target path conflict with {existing_owner}")
                 return
 
-            # Defensive check for old links
-            if db_entry and db_entry.get("target_path") and db_entry["target_path"] != target_path:
-                remove_link_and_empty_dirs(db_entry["target_path"])
-            
             create_link(filepath, target_path, soft_link)
-            self.db.update_video_entry(filepath, final_metadata, target_path, current_hash, source_root)
+            self.db.update_video_entry(filepath, final_metadata, target_path, current_hash, source_root, error=None)
         else:
             print(f"Could not generate target path for {filepath}")
-            self.db.add_error_file(filepath, "Could not generate target path")
+            self.db.update_video_entry(filepath, final_metadata, None, current_hash, source_root, error="Could not generate target path")
