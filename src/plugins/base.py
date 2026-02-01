@@ -16,33 +16,49 @@ class BaseVideoPlugin:
 
     def extract_filename_metadata(self, filepath):
         """
-        Extracts metadata purely from the filename (using GuessIt or LLM).
-        Must return a dictionary.
+        Extracts metadata using the configured processing chain.
         """
         filename = os.path.basename(filepath)
-        # Check args for LLM usage - args might be an object or dict depending on implementation
-        use_llm = getattr(self.args, 'use_llm', False)
-        
-        if use_llm:
-            metadata = self._extract_llm(filename)
-            # Basic validation: check if metadata isn't None
-            if metadata: 
+        chain = getattr(self.args, 'chain', ['guessit'])
+        providers = getattr(self.args, 'providers', {})
+
+        for processor_name in chain:
+            processor_name = processor_name.strip()
+            metadata = None
+            
+            if processor_name == 'guessit':
+                # print(f"Trying GuessIt for {filename}...")
+                metadata = self._extract_guessit(filename)
+            elif processor_name in providers:
+                # print(f"Trying Provider '{processor_name}' for {filename}...")
+                provider_config = providers[processor_name]
+                if provider_config.get("type") == "llm":
+                    metadata = self._extract_llm(filename, provider_config)
+            else:
+                print(f"Warning: Unknown processor '{processor_name}' in chain.")
+
+            # Validate
+            is_valid, _ = self._validate_metadata(metadata)
+            if is_valid:
                 return metadata
-            print(f"LLM extraction failed for {filename}. Falling back to GuessIt.")
         
-        return self._extract_guessit(filename)
+        # If all failed, return the last result (or empty) to propagate error reason
+        return metadata if metadata else {}
 
     def _extract_guessit(self, filename):
-        # Default implementation, can be overridden
         options = self._get_guessit_options()
         guess = guessit(filename, options=options)
         return self._map_guessit_to_metadata(guess)
 
-    def _extract_llm(self, filename):
-        api_key = getattr(self.args, 'llm_api_key', None)
-        api_base = getattr(self.args, 'llm_api_base', 'https://api.openai.com/v1')
-        model = getattr(self.args, 'llm_model', 'gpt-3.5-turbo')
+    def _extract_llm(self, filename, config):
+        api_key = config.get("api_key")
+        api_base = config.get("base_url", "https://api.openai.com/v1")
+        model = config.get("model", "gpt-3.5-turbo")
         
+        if not api_key:
+            print("Error: Missing api_key for LLM provider.")
+            return None
+
         client = OpenAI(api_key=api_key, base_url=api_base)
         prompt = self._get_llm_prompt(filename)
         try:
@@ -52,7 +68,6 @@ class BaseVideoPlugin:
                 response_format={"type": "text"}
             )
             content = chat_completion.choices[0].message.content
-            # Locate JSON content if wrapped in markdown code blocks
             if "```json" in content:
                 content = content.split("```json")[1].split("```")[0].strip()
             elif "```" in content:
@@ -73,7 +88,6 @@ class BaseVideoPlugin:
         return dict(guess)
 
     def _validate_metadata(self, metadata):
-        # Default validation: title is required
         if not metadata or not metadata.get("title"):
             return False, "Missing title"
         return True, "OK"
@@ -82,47 +96,36 @@ class BaseVideoPlugin:
         raise NotImplementedError
 
     def calculate_hash(self, metadata):
-        # Calculate hash based on filename-derived fields only
-        # Subclasses should define which fields are important
         stable_json = json.dumps(metadata, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(stable_json.encode('utf-8')).hexdigest()
 
     def process_file(self, filepath, source_root):
-        dst_root = getattr(self.args, "dst") # Get destination root from config
         db_entry = self.db.get_video_entry(source_root, filepath)
         soft_link = getattr(self.args, 'soft_link', True)
+        dst_root = getattr(self.args, "dst") 
         
         # Step 1: Check against DB
         if db_entry:
             final_metadata = db_entry["metadata"]
-            
-            # Recalculate hash based on what is currently in the DB
-            # This detects if the user manually edited the DB file
             current_db_hash = self.calculate_hash(final_metadata)
             
             if db_entry.get("metadata_hash") == current_db_hash:
-                # No manual changes in DB.
-                # Check if it was previously an error
                 if db_entry.get("error"):
                     is_valid, error_reason = self._validate_metadata(final_metadata)
-                    if not is_valid:
-                        return 
+                    if not is_valid: return 
                     print(f"File {filepath} previously had error but now seems valid. Retrying.")
                 else:
-                    # Valid file, unchanged. Just ensure link exists.
                     target_path = self.generate_target_path(final_metadata, filepath)
                     if not target_path: return 
 
-                    if not os.path.lexists(target_path): # Check if link exists (even if broken)
+                    if not os.path.lexists(target_path):
                         create_link(filepath, target_path, soft_link)
                     
-                    # Ensure DB is up to date (e.g. if dst_root changed in config, we might need to update rel path)
-                    # We pass the current dst_root from config to update_video_entry
-                    self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, target_path, current_db_hash, error=None)
+                    if db_entry.get("source_root") != source_root:
+                         self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, target_path, current_db_hash, error=None)
                     return 
 
             else:
-                # User manually edited the DB metadata
                 print(f"Metadata changed for {filepath} (corrected by human), re-processing.")
                 is_valid, error_reason = self._validate_metadata(final_metadata)
                 
@@ -131,20 +134,17 @@ class BaseVideoPlugin:
                     self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_db_hash, error=error_reason)
                     return
 
-                # Valid now!
                 target_path = self.generate_target_path(final_metadata, filepath)
                 if not target_path:
                     self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_db_hash, error="Cannot generate target path")
                     return
 
-                # Check conflict
                 existing_owner = self.db.get_file_by_target_path(target_path)
                 if existing_owner and existing_owner != filepath:
                     print(f"Target path conflict for {filepath}. Already used by {existing_owner}.")
                     self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_db_hash, error=f"Target path conflict with {existing_owner}")
                     return
 
-                # Re-link
                 old_target_path = db_entry.get("target_path")
                 if target_path and target_path != old_target_path:
                      print(f"Target path changed for {filepath}. Relinking.")
@@ -157,10 +157,8 @@ class BaseVideoPlugin:
                 self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, target_path, current_db_hash, error=None)
                 return 
 
-        # Step 2: New File - Extract filename metadata
+        # Step 2: New File
         filename_metadata = self.extract_filename_metadata(filepath)
-        
-        # Calculate hash of filename metadata immediately
         current_hash = self.calculate_hash(filename_metadata)
         final_metadata = filename_metadata.copy()
 
@@ -172,7 +170,7 @@ class BaseVideoPlugin:
             self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_hash, error=error_reason)
             return
 
-        # Step 4: FFmpeg scan (Only for valid new files)
+        # Step 4: FFmpeg scan
         print(f"Scanning technical info for {filepath}...")
         ffmpeg_info = get_video_info_ffmpeg(filepath)
         final_metadata.update(ffmpeg_info)
@@ -181,7 +179,6 @@ class BaseVideoPlugin:
         target_path = self.generate_target_path(final_metadata, filepath)
         
         if target_path:
-            # Check for conflict
             existing_owner = self.db.get_file_by_target_path(target_path)
             if existing_owner and existing_owner != filepath:
                 print(f"Target path conflict for {filepath}. Already used by {existing_owner}.")
