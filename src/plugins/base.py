@@ -50,7 +50,14 @@ class BaseVideoPlugin:
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "text"}
             )
-            return json.loads(chat_completion.choices[0].message.content)
+            content = chat_completion.choices[0].message.content
+            # Locate JSON content if wrapped in markdown code blocks
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].strip()
+            
+            return json.loads(content)
         except Exception as e:
             print(f"LLM Error: {e}")
             return None
@@ -88,7 +95,52 @@ class BaseVideoPlugin:
         db_entry = self.db.get_video_entry(filepath)
         soft_link = getattr(self.args, 'soft_link', True)
         
-        # Step 1: Extract filename metadata
+        # Step 1: Check against DB
+        if db_entry:
+            final_metadata = db_entry["metadata"]
+            
+            # Recalculate hash based on what is currently in the DB
+            # This detects if the user manually edited the DB file
+            current_db_hash = self.calculate_hash(final_metadata)
+            
+            if db_entry["metadata_hash"] == current_db_hash:
+                # No manual changes in DB, and file exists in DB.
+                # We assume the data is correct and valid.
+                # Just ensure the link exists.
+                # print(f"No change detected for {filepath}. Skipping.")
+
+                target_path = self.generate_target_path(final_metadata, filepath)
+                if not os.path.exists(db_entry.get("target_path", "")):
+                    # Link missing? Recreate
+                    if target_path:
+                        create_link(filepath, target_path, soft_link)
+                
+                # Check if we need to update source_root if it was missing or different (migration scenario)
+                if db_entry.get("source_root") != source_root:
+                     self.db.update_video_entry(filepath, final_metadata, target_path, current_db_hash, source_root)
+
+                return # Done for this file
+            else:
+                # User manually edited the DB metadata
+                print(f"Metadata changed for {filepath} (corrected by human), re-linking.")
+                
+                # Re-generate target path with user-corrected metadata
+                target_path = self.generate_target_path(final_metadata, filepath)
+                
+                if target_path and target_path != db_entry.get("target_path"):
+                     print(f"Target path changed for {filepath}. Relinking.")
+                     remove_link_and_empty_dirs(db_entry.get("target_path"))
+                     create_link(filepath, target_path, soft_link)
+                elif not os.path.exists(db_entry.get("target_path", "")):
+                     # Link missing? Recreate
+                     if target_path:
+                        create_link(filepath, target_path, soft_link)
+                
+                # Update DB with new hash so we don't trigger this again next time
+                self.db.update_video_entry(filepath, final_metadata, target_path, current_db_hash, source_root)
+                return # Done for this file
+
+        # Step 2: New File - Extract filename metadata
         filename_metadata = self.extract_filename_metadata(filepath)
         
         # Check if valid
@@ -102,34 +154,7 @@ class BaseVideoPlugin:
         
         final_metadata = filename_metadata.copy()
         
-        # Step 2: Check against DB
-        if db_entry:
-            stored_hash = db_entry["metadata_hash"]
-            if stored_hash == current_hash:
-                # print(f"No change detected for {filepath}. Using cached metadata.")
-                # Feat 2: Reuse cached ffmpeg info if filename hasn't changed
-                # Merge cached ffmpeg info into current filename metadata
-                # We assume stored_metadata has the correct ffmpeg info
-                final_metadata = db_entry["metadata"]
-                
-                # Check if target path needs update (e.g. if logic changed or it was missing)
-                target_path = self.generate_target_path(final_metadata, filepath)
-                if target_path and target_path != db_entry.get("target_path"):
-                     print(f"Target path changed for {filepath}. Relinking.")
-                     remove_link_and_empty_dirs(db_entry.get("target_path"))
-                     create_link(filepath, target_path, soft_link)
-                     self.db.update_video_entry(filepath, final_metadata, target_path, current_hash, source_root)
-                elif not os.path.exists(db_entry.get("target_path", "")):
-                     # Link missing? Recreate
-                     if target_path:
-                        create_link(filepath, target_path, soft_link)
-                
-                return # Done for this file
-
-            else:
-                print(f"Metadata changed for {filepath}. Re-scanning.")
-
-        # Step 3: FFmpeg scan (Only if new or changed)
+        # Step 3: FFmpeg scan (Only for new files)
         print(f"Scanning technical info for {filepath}...")
         ffmpeg_info = get_video_info_ffmpeg(filepath)
         final_metadata.update(ffmpeg_info)
@@ -138,6 +163,7 @@ class BaseVideoPlugin:
         target_path = self.generate_target_path(final_metadata, filepath)
         
         if target_path:
+            # Defensive check for old links (shouldn't happen for new files usually)
             if db_entry and db_entry.get("target_path") and db_entry["target_path"] != target_path:
                 remove_link_and_empty_dirs(db_entry["target_path"])
             
