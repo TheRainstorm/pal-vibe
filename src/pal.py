@@ -107,10 +107,11 @@ if __name__ == "__main__":
     parser.add_argument("--llm-api-base", default="https://api.openai.com/v1", help="LLM API Base URL.")
     parser.add_argument("--llm-model", default="gpt-3.5-turbo", help="LLM Model name.")
     parser.add_argument("--chain", help="Comma separated processing chain.")
+    parser.add_argument("--log-level", help="Set logging level (DEBUG, INFO, WARNING, ERROR).")
 
     args = parser.parse_args()
     
-    setup_logging(args.verbose)
+    setup_logging(args.verbose, args.log_level)
     
     db_cache = {}
     global_providers = {}
