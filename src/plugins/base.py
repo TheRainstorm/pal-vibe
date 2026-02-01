@@ -34,6 +34,7 @@ class BaseVideoPlugin:
                 provider_config = providers[processor_name]
                 if provider_config.get("type") == "llm":
                     metadata = self._extract_llm(filename, provider_config)
+                    logger.info(f"{processor_name}: {metadata}")
             else:
                 logger.warning(f"Unknown processor '{processor_name}' in chain.")
 
