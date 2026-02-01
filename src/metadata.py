@@ -65,13 +65,13 @@ def get_video_info_ffmpeg(filepath):
 def scan_video_files(src_dir):
     """
     Recursively scans the source directory for video files.
-    Returns a list of absolute paths to video files.
+    Returns a list of normalized paths to video files.
     """
     video_files = []
     for root, _, files in os.walk(src_dir):
         for file in files:
             if file.lower().endswith(VIDEO_EXTENSIONS):
-                video_files.append(os.path.join(root, file))
+                video_files.append(os.path.normpath(os.path.join(root, file)))
     return video_files
 
 def generate_version_str(metadata):

@@ -12,6 +12,8 @@ class TaskConfig:
         self.__dict__.update(entries)
 
 def get_db_instance(db_path, db_cache):
+    # Ensure DB path is normalized
+    db_path = os.path.normpath(db_path)
     if db_path not in db_cache:
         db_cache[db_path] = VideoDatabase(db_path)
     return db_cache[db_path]
@@ -22,6 +24,10 @@ def run_task(task_config, db_cache):
         print(f"Skipping invalid task config: {task_config}")
         return
 
+    # Normalize paths
+    task_config["src"] = os.path.normpath(task_config["src"])
+    task_config["dst"] = os.path.normpath(task_config["dst"])
+    
     # Determine DB path
     db_path = task_config.get("db", "pal_database.yaml")
     db = get_db_instance(db_path, db_cache)
@@ -60,15 +66,16 @@ def run_task(task_config, db_cache):
 
     # Cleanup: Only check files belonging to this source_root
     # This prevents deleting links from other tasks sharing the same DB
+    # stored_files are now absolute paths
     stored_files_in_root = db.get_files_by_source_root(source_root)
     
     for stored_file in stored_files_in_root:
         if stored_file not in current_files_set and not os.path.exists(stored_file):
             print(f"File removed: {stored_file}, cleaning up...")
-            entry = db.get_video_entry(stored_file)
-            if entry and "target_path" in entry:
+            entry = db.get_video_entry(source_root, stored_file)
+            if entry and entry.get("target_path"):
                 remove_link_and_empty_dirs(entry["target_path"])
-            db.remove_entry(stored_file)
+            db.remove_entry(source_root, stored_file)
 
     if not found_files:
         print("No video files found.")

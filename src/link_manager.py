@@ -10,7 +10,7 @@ def create_link(src_file, target_path, is_soft_link=True):
         os.makedirs(target_dir, exist_ok=True)
         print(f"Created directory: {target_dir}")
 
-    if os.path.exists(target_path):
+    if os.path.lexists(target_path):
         # print(f"Warning: Target link already exists, skipping: {target_path}")
         return
 
