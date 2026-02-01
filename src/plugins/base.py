@@ -154,12 +154,16 @@ class BaseVideoPlugin:
                     return
 
                 # Re-link
-                if target_path and target_path != db_entry.get("target_path"):
+                old_target_path = db_entry.get("target_path")
+                if target_path and target_path != old_target_path:
                      print(f"Target path changed for {filepath}. Relinking.")
-                     remove_link_and_empty_dirs(db_entry.get("target_path"))
+                     if old_target_path:
+                        remove_link_and_empty_dirs(old_target_path)
                      create_link(filepath, target_path, soft_link)
                 elif not os.path.exists(db_entry.get("target_path", "")):
-                     create_link(filepath, target_path, soft_link)
+                     # Link missing? Recreate
+                     if target_path:
+                        create_link(filepath, target_path, soft_link)
                 
                 # Update DB, clear error
                 self.db.update_video_entry(filepath, final_metadata, target_path, current_db_hash, source_root, error=None)
