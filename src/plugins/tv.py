@@ -52,3 +52,13 @@ class TVPlugin(BaseVideoPlugin):
         filename_str += ext
 
         return os.path.join(self.args.dst, self.args.tv_folder, series_dir, season_dir, filename_str)
+
+    def _validate_metadata(self, metadata):
+        # TV requires both title and episode
+        if not metadata:
+            return False, "Metadata extraction failed"
+        if not metadata.get("title"):
+            return False, "Missing title"
+        if metadata.get("episode") is None:
+            return False, "Missing episode number"
+        return True, "OK"

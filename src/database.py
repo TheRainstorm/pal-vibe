@@ -8,8 +8,14 @@ class VideoDatabase:
         self.data = self._load_database()
         if "files" not in self.data:
             self.data["files"] = {}
+        
+        # Migrate old error_files list to dict if necessary
         if "error_files" not in self.data:
-            self.data["error_files"] = []
+            self.data["error_files"] = {}
+        elif isinstance(self.data["error_files"], list):
+            # Migration: convert list to dict with default reason
+            old_list = self.data["error_files"]
+            self.data["error_files"] = {path: "Unknown error (migrated)" for path in old_list}
 
     def _load_database(self):
         if os.path.exists(self.db_path):
@@ -33,7 +39,7 @@ class VideoDatabase:
         }
         # If it was in error list, remove it
         if src_filepath in self.data["error_files"]:
-            self.data["error_files"].remove(src_filepath)
+            del self.data["error_files"][src_filepath]
         self._save_database()
 
     def remove_entry(self, src_filepath):
@@ -43,10 +49,9 @@ class VideoDatabase:
             return True
         return False
 
-    def add_error_file(self, src_filepath):
-        if src_filepath not in self.data["error_files"]:
-            self.data["error_files"].append(src_filepath)
-            self._save_database()
+    def add_error_file(self, src_filepath, reason="Unknown error"):
+        self.data["error_files"][src_filepath] = reason
+        self._save_database()
 
     def is_error_file(self, src_filepath):
         return src_filepath in self.data["error_files"]
@@ -62,3 +67,13 @@ class VideoDatabase:
             fpath for fpath, data in self.data["files"].items() 
             if data.get("source_root") == source_root
         ]
+    
+    def get_file_by_target_path(self, target_path):
+        """
+        Finds if any file is already linked to the given target_path.
+        Returns the source filepath if found, None otherwise.
+        """
+        for fpath, data in self.data["files"].items():
+            if data.get("target_path") == target_path:
+                return fpath
+        return None
