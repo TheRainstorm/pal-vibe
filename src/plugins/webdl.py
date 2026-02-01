@@ -38,4 +38,5 @@ class WebDLPlugin(BaseVideoPlugin):
         if not title: return None
         ext = os.path.splitext(filepath)[1]
         
-        return os.path.join(self.args.dst, "WebDL", title, f"{title}{ext}")
+        sub_folder = getattr(self.args, 'sub_folder', None) or "WebDL"
+        return os.path.join(self.args.dst, sub_folder, title, f"{title}{ext}")

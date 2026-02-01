@@ -99,8 +99,7 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--dst", help="Destination directory.")
     parser.add_argument("-t", "--type", help="Type of video: movie, tv, webdl.")
     parser.add_argument("-S", "--soft-link", action="store_true", help="Create soft links.")
-    parser.add_argument("--movie-folder", default="Movie", help="Subfolder for movies.")
-    parser.add_argument("--tv-folder", default="TV", help="Subfolder for TV series.")
+    parser.add_argument("--sub-folder", help="Subfolder name within destination (default depends on type).")
     parser.add_argument("--db", default="pal_database.yaml", help="Database file path.")
     
     parser.add_argument("--llm-api-key", help="API key for CLI LLM.")

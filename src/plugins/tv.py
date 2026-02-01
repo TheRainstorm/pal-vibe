@@ -51,7 +51,8 @@ class TVPlugin(BaseVideoPlugin):
             filename_str += f" - {ep_title}"
         filename_str += ext
 
-        return os.path.join(self.args.dst, self.args.tv_folder, series_dir, season_dir, filename_str)
+        sub_folder = getattr(self.args, 'sub_folder', None) or "TV"
+        return os.path.join(self.args.dst, sub_folder, series_dir, season_dir, filename_str)
 
     def _validate_metadata(self, metadata):
         # TV requires both title and episode

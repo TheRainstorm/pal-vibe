@@ -45,4 +45,5 @@ class MoviePlugin(BaseVideoPlugin):
             filename_str += f" - {version_str}"
         filename_str += ext
 
-        return os.path.join(self.args.dst, self.args.movie_folder, movie_dir_name, filename_str)
+        sub_folder = getattr(self.args, 'sub_folder', None) or "Movie"
+        return os.path.join(self.args.dst, sub_folder, movie_dir_name, filename_str)
