@@ -311,9 +311,7 @@ async def update_metadata(update: MetadataUpdate):
 
     # Update DB directly
     entry = db.get_video_entry(update.source_root, update.full_path)
-    current_hash = "manual_update" # We need a hash. 
-    # Actually, we should calculate the hash of the NEW metadata so future scans match it.
-    
+
     # Instantiate plugin to calculate hash and process
     result = prepare_task(task_config, state.db_cache, state.global_providers)
     if not result:
@@ -322,12 +320,8 @@ async def update_metadata(update: MetadataUpdate):
     args, _, PluginClass = result
     plugin = PluginClass(db, args)
     
-    new_hash = plugin.calculate_hash(update.metadata)
-    
-    # 1. Save new metadata to DB (this sets the 'expected' state)
-    # We pass None as target_path temporarily if we don't know it, 
-    # but process_file will fix it. Better to keep old target path if exists.
     old_target = entry.get("target_path") if entry else None
+    old_hash = entry.get("metadata_hash")
     
     db.update_video_entry(
         update.source_root, 
@@ -335,23 +329,11 @@ async def update_metadata(update: MetadataUpdate):
         update.full_path, 
         update.metadata, 
         old_target, 
-        new_hash, 
+        old_hash, 
         error=None # Clear error on manual update attempt
     )
     
     # 2. Trigger process_file to re-link based on new DB data
-    # process_file will see the hash matches (since we just saved it) 
-    # and execute the linking logic if target path changed.
-    # WAIT: process_file logic says:
-    # "if db_entry['metadata_hash'] == current_db_hash: No change detected... Ensure link exists."
-    # So if we save the new hash, process_file will think "Nothing changed" and just ensure link.
-    # But we WANT it to re-link using the NEW metadata.
-    # The generate_target_path uses the metadata passed to it.
-    # In process_file (Line 132 in base.py):
-    # final_metadata = db_entry["metadata"] (which is our NEW metadata)
-    # target_path = self.generate_target_path(final_metadata...)
-    # So yes, it will work! It will generate path from new metadata, notice it differs from old_target, and relink.
-    
     plugin.process_file(update.full_path, update.source_root)
     
     return {"status": "updated"}

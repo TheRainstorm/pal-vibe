@@ -107,31 +107,6 @@ def run_task_once(task_config, db_cache, global_providers):
     for filepath in found_files:
         plugin.process_file(filepath, source_root)
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Scan and link video files for Jellyfin.")
-    
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging (DEBUG level).")
-    parser.add_argument("-c", "--config", help="Path to YAML configuration file.")
-    parser.add_argument("--monitor", action="store_true", help="Run in monitoring mode.")
-    
-    # Single task arguments
-    parser.add_argument("-s", "--src", help="Source directory.")
-    parser.add_argument("-d", "--dst", help="Destination directory.")
-    parser.add_argument("-t", "--type", help="Type of video: movie, tv, webdl.")
-    parser.add_argument("-S", "--soft-link", action="store_true", help="Create soft links.")
-    parser.add_argument("--sub-folder", help="Subfolder name within destination.")
-    parser.add_argument("--db", default="pal_database.yaml", help="Database file path.")
-    
-    parser.add_argument("--llm-api-key", help="API key for CLI LLM.")
-    parser.add_argument("--llm-api-base", default="https://api.openai.com/v1", help="LLM API Base URL.")
-    parser.add_argument("--llm-model", default="gpt-3.5-turbo", help="LLM Model name.")
-    parser.add_argument("--chain", help="Comma separated processing chain.")
-    parser.add_argument("--log-level", help="Set logging level (DEBUG, INFO, WARNING, ERROR).")
-
-    args = parser.parse_args()
-    
-    setup_logging(args.verbose, args.log_level)
-    
 def load_configuration(config_path):
     if not os.path.exists(config_path):
         return None, None, []
@@ -153,7 +128,23 @@ def load_configuration(config_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Scan and link video files for Jellyfin.")
-    # ... (rest of the args) ...
+    
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging (DEBUG level).")
+    parser.add_argument("-c", "--config", help="Path to YAML configuration file.")
+    parser.add_argument("--monitor", action="store_true", help="Run in monitoring mode.")
+    
+    # Single task arguments
+    parser.add_argument("-s", "--src", help="Source directory.")
+    parser.add_argument("-d", "--dst", help="Destination directory.")
+    parser.add_argument("-t", "--type", help="Type of video: movie, tv, webdl.")
+    parser.add_argument("-S", "--soft-link", action="store_true", help="Create soft links.")
+    parser.add_argument("--sub-folder", help="Subfolder name within destination.")
+    parser.add_argument("--db", default="pal_database.yaml", help="Database file path.")
+    
+    parser.add_argument("--llm-api-key", help="API key for CLI LLM.")
+    parser.add_argument("--llm-api-base", default="https://api.openai.com/v1", help="LLM API Base URL.")
+    parser.add_argument("--llm-model", default="gpt-3.5-turbo", help="LLM Model name.")
+    parser.add_argument("--chain", help="Comma separated processing chain.")
     parser.add_argument("--log-level", help="Set logging level (DEBUG, INFO, WARNING, ERROR).")
 
     args = parser.parse_args()

@@ -109,6 +109,7 @@ class BaseVideoPlugin:
         if db_entry:
             final_metadata = db_entry["metadata"]
             current_db_hash = self.calculate_hash(final_metadata)
+            # logger.debug(f"{current_db_hash=} {db_entry=} ")
             
             if db_entry.get("metadata_hash") == current_db_hash:
                 if db_entry.get("error"):
@@ -122,10 +123,6 @@ class BaseVideoPlugin:
                     if not os.path.lexists(target_path):
                         logger.info(f"Link missing, recreating: {target_path}")
                         create_link(filepath, target_path, soft_link)
-                    
-                    if db_entry.get("source_root") != source_root:
-                         logger.debug(f"Updating source_root for {filepath}")
-                         self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, target_path, current_db_hash, error=None)
                     
                     logger.debug(f"No change detected for: {filepath}")
                     return 

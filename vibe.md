@@ -174,5 +174,13 @@ fix:
 - 一个界面按照文件树展示所有dst 视频文件，点击后可以查看和编辑元信息
     - 修改完后，触发单个视频的扫描链接
 
+
+fix:
+
+1. pal.py 重复了 __main__ 部分，导致参数选项丢失，我已修复
+2. base.py:process_file:127-129 会判断 db_entry.get("source_root") 是否等于当前 source_roo太，但是实际 db_entry.get("source_root") 不存在，导致反复 Updating source_root for {filepath}，我我删除了该部分
+3. server.py:update_metadata 中错误的更新了数据库为新 hash，导致 plugin.process_file 中判断 hash 不一致时，清理旧的连接目录功能失效，我已修复。
+
+
 进阶需求2：支持读取 jellyfin 刮削出来的 nfo 和海报图片。在 webui 中展示一个类似的媒体库，点击对应电影，可以展示扫描的元信息，并支持修改。
 
