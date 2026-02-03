@@ -132,6 +132,34 @@ if __name__ == "__main__":
     
     setup_logging(args.verbose, args.log_level)
     
+def load_configuration(config_path):
+    if not os.path.exists(config_path):
+        return None, None, []
+        
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+        
+    defaults = config.get("defaults", {})
+    global_providers = config.get("providers", {})
+    raw_tasks = config.get("tasks", [])
+    
+    tasks_to_run = []
+    for task in raw_tasks:
+        merged_task = defaults.copy()
+        merged_task.update(task)
+        tasks_to_run.append(merged_task)
+        
+    return defaults, global_providers, tasks_to_run
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Scan and link video files for Jellyfin.")
+    # ... (rest of the args) ...
+    parser.add_argument("--log-level", help="Set logging level (DEBUG, INFO, WARNING, ERROR).")
+
+    args = parser.parse_args()
+    
+    setup_logging(args.verbose, args.log_level)
+    
     db_cache = {}
     global_providers = {}
     
@@ -139,23 +167,14 @@ if __name__ == "__main__":
     tasks_to_run = []
 
     if args.config:
-        if not os.path.exists(args.config):
-            logger.error(f"Config file not found: {args.config}")
-            exit(1)
-            
-        with open(args.config, 'r') as f:
-            config = yaml.safe_load(f)
-            
-        defaults = config.get("defaults", {})
-        global_providers = config.get("providers", {})
-        raw_tasks = config.get("tasks", [])
-        
-        for task in raw_tasks:
-            merged_task = defaults.copy()
-            merged_task.update(task)
-            tasks_to_run.append(merged_task)
+        _, global_providers, tasks_to_run = load_configuration(args.config)
+        if not tasks_to_run:
+             logger.error(f"Config file not found or empty: {args.config}")
+             exit(1)
             
     else:
+        # ... (single task logic) ...
+
         if not args.src or not args.dst or not args.type:
             if not args.monitor:
                  parser.error("src, dst, and type are required unless -c/--config is used.")
