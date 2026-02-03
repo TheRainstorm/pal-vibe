@@ -97,6 +97,37 @@ python src/pal.py -s "/mnt/Disk2/BT/downloads/Video/Movie_anime" -d "/mnt/Disk2/
    4 # 或者单任务监听 (不推荐，但支持)
    5 python3 src/pal.py -s ... -d ... -t ... --monitor
 
+fix1: 1）能不能把监听 src 和 监听 dst 分开成两个选项来单独启用。2）在配置文件中，可以对每个 task 控制是否需要监听 src 和 dst。
+
+设计方案：
+
+   1. 命令行参数:
+       * 移除 --monitor（因为它太笼统）。
+       * 新增 --monitor-src: 启用源目录监听（新增/修改）。
+       * 新增 --monitor-dst: 启用目标目录监听（反向删除）。
+       * 为了方便，如果只指定 --monitor，可以默认启用两者（或者只启用 src，更安全）。这里我建议：保留 --monitor 作为“全开”的快捷方式，或者将其设为等同于 --monitor-src。但为了明确性，最好是用新的参数。
+       * 我们可以让 --monitor 作为一个基础开关，如果指定了，但没有指定子开关，默认行为是什么？
+       * 更好方案：
+           * --monitor: 开启监听模式。
+           * --no-monitor-src: 禁用源监听。
+           * --no-monitor-dst: 禁用目标监听。
+           * 默认：如果开启 --monitor，默认两者都启用（遵循之前的行为）。或者，我们可以更显式：--monitor 仅仅是开启监听循环，具体监听什么由 Config 或其他参数决定。
+
+   2. 配置文件 (`config.yaml`):
+      在每个 task 中增加控制字段：
+
+   1     tasks:
+   2       - src: "..."
+   3         dst: "..."
+   4         monitor_src: true  # 默认 true
+   5         monitor_dst: false # 默认 false (为了安全，反向删除最好默认关闭)
+
+   3. 优先级逻辑:
+       * Task Config: 最细粒度的控制。
+       * CLI Args: 全局覆盖。例如，如果 CLI 指定了 --monitor-src-only，则忽略 Config 中的 monitor_dst: true。
+       * 为了简化，我们可以规定：CLI 参数决定是否进入监听模式，Config 决定具体监听哪些目录。
+
+
 
 
 feat:

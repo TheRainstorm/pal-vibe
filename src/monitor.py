@@ -77,9 +77,6 @@ class SrcHandler(FileSystemEventHandler):
 
     def on_moved(self, event):
         if not event.is_directory:
-            # Source path is gone, maybe we should treat as delete?
-            # But usually move means rename. 
-            # For now, process the NEW path.
             self.queue.add(event.dest_path, 'PROCESS', self.ctx)
 
 class DstHandler(FileSystemEventHandler):
@@ -97,16 +94,9 @@ class MonitorManager:
         self.db_cache = db_cache
         self.queue = BatchQueue(self.handle_process, self.handle_delete)
         self.worker_thread = threading.Thread(target=self.queue.run)
-        self.plugins_cache = {} # Map task_id -> Plugin instance
+        self.plugins_cache = {} 
 
     def get_plugin(self, task_config, db):
-        # We need to recreate plugin or cache it.
-        # Since args are in task_config object, let's assume it's passed correctly.
-        # Warning: reusing plugin instances might be tricky if they hold state.
-        # Currently they store 'db' and 'args'.
-        
-        # We'll instantiate fresh every time or cache based on config hash?
-        # For simplicity, instantiate fresh.
         type_map = {
             0: TVPlugin, "tv": TVPlugin,
             1: MoviePlugin, "movie": MoviePlugin,
@@ -130,13 +120,9 @@ class MonitorManager:
             plugin.process_file(filepath, task_config.src)
 
     def handle_delete(self, target_path, ctx):
-        # target_path is the link that was deleted
         logger.info(f"[Monitor] Link deleted: {target_path}")
         db = ctx['db']
         
-        # Find the source file that owns this target path
-        # Note: get_file_by_target_path checks ALL roots in DB.
-        # This is correct because we want to find THE source file.
         src_filepath = db.get_file_by_target_path(target_path)
         
         if src_filepath:
@@ -150,28 +136,14 @@ class MonitorManager:
             else:
                 logger.warning(f"[Monitor] Source file already gone: {src_filepath}")
             
-            # Remove from DB
-            # We need source_root for remove_entry. get_video_entry might help if we had it.
-            # But get_file_by_target_path only returns src_filepath.
-            # Let's improve get_file_by_target_path or just iterate.
-            
-            # Quick fix: iterate to find root
-            # Since we have the DB instance, we can do it manually or add a helper.
-            # Let's rely on the fact that db.remove_entry needs source_root.
-            # We can find source_root by checking which root contains the file.
-            
-            # Actually, `db.data["roots"]` structure allows us to find the root.
-            # Let's just reload the entry to be sure.
-            # Wait, `get_video_entry` requires `src_root`. This is a circular dependency.
-            
-            # Improvement: Modify `get_file_by_target_path` to return (src_root, src_filepath)
-            # For now, let's implement a quick lookup here.
-            
+            # Find source root to remove entry
             found_root = None
-            for root in db.data["roots"]:
-                if src_filepath.startswith(root):
-                    found_root = root
-                    break
+            if "roots" in db.data:
+                for root in db.data["roots"]:
+                    # Simple prefix check might be enough if paths are normalized
+                    if src_filepath.startswith(root):
+                        found_root = root
+                        break
             
             if found_root:
                 db.remove_entry(found_root, src_filepath)
@@ -183,24 +155,31 @@ class MonitorManager:
         ctx = {'config': task_config, 'db': db}
         
         # Monitor Source
-        if os.path.exists(task_config.src):
-            self.observer.schedule(SrcHandler(self.queue, ctx), path=task_config.src, recursive=True)
-            logger.info(f"Monitoring Source: {task_config.src}")
+        monitor_src = getattr(task_config, 'monitor_src', True)
+        if monitor_src:
+            if os.path.exists(task_config.src):
+                self.observer.schedule(SrcHandler(self.queue, ctx), path=task_config.src, recursive=True)
+                logger.info(f"Monitoring Source: {task_config.src}")
+            else:
+                logger.error(f"Source path not found: {task_config.src}")
         else:
-            logger.error(f"Source path not found: {task_config.src}")
+            logger.info(f"Monitoring Source DISABLED for: {task_config.src}")
 
-        # Monitor Destination (Core Demand 6)
-        # Note: Monitor the specific subfolder for this task, or the whole DST?
-        # If multiple tasks share DST, we might monitor it multiple times.
-        # Watchdog allows multiple observers on same path.
-        if os.path.exists(task_config.dst):
-            self.observer.schedule(DstHandler(self.queue, ctx), path=task_config.dst, recursive=True)
-            logger.info(f"Monitoring Destination: {task_config.dst}")
+        # Monitor Destination
+        monitor_dst = getattr(task_config, 'monitor_dst', False)
+        if monitor_dst:
+            if os.path.exists(task_config.dst):
+                self.observer.schedule(DstHandler(self.queue, ctx), path=task_config.dst, recursive=True)
+                logger.info(f"Monitoring Destination: {task_config.dst}")
+            else:
+                try:
+                    os.makedirs(task_config.dst, exist_ok=True)
+                    self.observer.schedule(DstHandler(self.queue, ctx), path=task_config.dst, recursive=True)
+                    logger.info(f"Monitoring Destination: {task_config.dst}")
+                except OSError:
+                    logger.error(f"Could not create/monitor destination: {task_config.dst}")
         else:
-            # Try creating it?
-            os.makedirs(task_config.dst, exist_ok=True)
-            self.observer.schedule(DstHandler(self.queue, ctx), path=task_config.dst, recursive=True)
-            logger.info(f"Monitoring Destination: {task_config.dst}")
+            logger.info(f"Monitoring Destination DISABLED for: {task_config.dst}")
 
     def start(self):
         self.worker_thread.start()

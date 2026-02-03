@@ -43,6 +43,12 @@ def prepare_task(task_config, db_cache, global_providers):
     if "chain" not in task_config:
         task_config["chain"] = ["guessit"]
 
+    # Set monitor defaults if not present
+    if "monitor_src" not in task_config:
+        task_config["monitor_src"] = True
+    if "monitor_dst" not in task_config:
+        task_config["monitor_dst"] = False # Default off for safety
+
     args = TaskConfig(**task_config)
 
     type_map = {
@@ -151,8 +157,7 @@ if __name__ == "__main__":
             
     else:
         if not args.src or not args.dst or not args.type:
-            # Only if not monitor? No, src/dst required for single run too
-            if not args.monitor: # Monitor might run empty? No, needs config.
+            if not args.monitor:
                  parser.error("src, dst, and type are required unless -c/--config is used.")
             
         task_config = vars(args)
@@ -175,8 +180,9 @@ if __name__ == "__main__":
         else:
             task_config["chain"] = ["guessit"]
 
-        # Only add if src is present (might be missing if user just typed --monitor without args which is invalid but handled)
         if task_config.get("src"):
+            # For single CLI task, default monitor_src=True, monitor_dst=False is reasonable?
+            # Or we can expose CLI args for them. For simplicity, let's stick to defaults.
             tasks_to_run.append(task_config)
 
     if not tasks_to_run:
@@ -189,14 +195,12 @@ if __name__ == "__main__":
         manager = MonitorManager(db_cache)
         
         for task_config in tasks_to_run:
-            # Prepare returns (TaskConfig, DB, PluginClass)
             result = prepare_task(task_config, db_cache, global_providers)
             if result:
                 task_args, db, _ = result
                 manager.add_task(task_args, db)
         
-        manager.start() # Blocks
+        manager.start() 
     else:
-        # Run Once Mode
         for task_config in tasks_to_run:
             run_task_once(task_config, db_cache, global_providers)
