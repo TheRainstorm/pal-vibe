@@ -70,10 +70,34 @@ python src/pal.py -s "/mnt/Disk2/BT/downloads/Video/Movie_anime" -d "/mnt/Disk2/
 
 核心需求3：扫描时，发现数据库中的源文件不存在时，把链接目录也删除
 
-核心需求4：监听模式，用户配置一个 yaml 文件，包含若干 src, dst，类型，链接目录。程序监听 src 的变化，当有新视频文件时，脚本对该视频文件进行扫描。
-推荐创建一个队列，src 目录可能持续变化，不断有文件增加和删除，等待 src 一段时间未变化后，将变化文件列表传递给脚本。
 
 核心需求5：支持调用 openai 兼容的 API，使用 llm 从文件名中提取需要的元信息。
+
+核心需求4：监听模式，用户配置一个 yaml 文件，包含若干 src, dst，类型，链接目录。程序监听 src 的变化，当有新视频文件时，脚本对该视频文件进行扫描。
+推荐创建一个队列，src 目录可能持续变化，不断有文件增加和删除，等待 src 一段时间未变化后，将变化文件列表传递给脚本。
+核心需求6：监听模式2,监听 dst 目录，如果 dst 目录删除了，则把源目录文件也删除。参考 /home/yfy/repo/pal-vibe/tmp/parse-and-link2/monitor.py 实现
+
+监听模式已经集成完毕。
+
+   1. `src/monitor.py`:
+       * 实现了 MonitorManager，管理 watchdog 观察者。
+       * BatchQueue 实现了防抖动（默认5秒）。
+       * SrcHandler 监听源目录，触发 PROCESS 事件。
+       * DstHandler 监听目标目录，触发 DELETE 事件（如果链接被删除，自动删除源文件）。
+   2. `src/pal.py`:
+       * 重构了任务解析逻辑，将“运行一次”和“监听”分开。
+       * 添加了 --monitor 参数。
+       * 在监听模式下，会将所有解析出的任务注册到 MonitorManager。
+
+  现在，您可以通过以下命令启动监听模式：
+
+   1 # 使用配置文件
+   2 python3 src/pal.py -c config.yaml --monitor
+   3
+   4 # 或者单任务监听 (不推荐，但支持)
+   5 python3 src/pal.py -s ... -d ... -t ... --monitor
+
+
 
 feat:
 
@@ -108,6 +132,9 @@ fix:
 6. 我希望无论如何数据库中都使用相对路径，视频文件使用相对 src 的相对路径，target_path 使用相对 dst 的相对路径
 7. 多了太多正则匹配的日志了，另外除了 -v，没办法显示指定 logger 级别吗？
 8. tv_folder 和 movie_folder 参数，统一为一个参数，每个格式类型都可以指定自己的 folder 名称
+
+
+
 进阶需求1：支持 web ui。
 
 - 有一个界面可以看到当前统计信息：各个 src 目录视频文件数，dst 目录视频文件数，识别错误文件数

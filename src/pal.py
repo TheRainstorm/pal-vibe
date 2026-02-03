@@ -6,6 +6,7 @@ from src.metadata import scan_video_files
 from src.link_manager import remove_link_and_empty_dirs
 from src.plugins import MoviePlugin, TVPlugin, WebDLPlugin
 from src.logger import setup_logging, get_logger
+from src.monitor import MonitorManager
 
 logger = get_logger(__name__)
 
@@ -21,10 +22,14 @@ def get_db_instance(db_path, db_cache):
         db_cache[db_path] = VideoDatabase(db_path)
     return db_cache[db_path]
 
-def run_task(task_config, db_cache, global_providers):
+def prepare_task(task_config, db_cache, global_providers):
+    """
+    Prepares task configuration and DB instance.
+    Returns (TaskConfig object, VideoDatabase instance, Plugin class) or None.
+    """
     if not task_config.get("src") or not task_config.get("dst") or not task_config.get("type"):
         logger.warning(f"Skipping invalid task config: {task_config}")
-        return
+        return None
 
     task_config["src"] = os.path.normpath(task_config["src"])
     task_config["dst"] = os.path.normpath(task_config["dst"])
@@ -53,15 +58,22 @@ def run_task(task_config, db_cache, global_providers):
     PluginClass = type_map.get(task_type)
     if not PluginClass:
         logger.error(f"Unknown task type: {task_type}")
-        return
+        return None
 
+    return args, db, PluginClass
+
+def run_task_once(task_config, db_cache, global_providers):
+    result = prepare_task(task_config, db_cache, global_providers)
+    if not result: return
+
+    args, db, PluginClass = result
     plugin = PluginClass(db, args)
-    source_root = task_config["src"]
+    source_root = args.src
 
     logger.info(f"--- Running Task ---")
     logger.info(f"Source: {source_root}")
     logger.info(f"Type: {plugin.get_type_name()}")
-    logger.info(f"Chain: {task_config['chain']}")
+    logger.info(f"Chain: {args.chain}")
     logger.info(f"Database: {db.db_path}")
 
     found_files = scan_video_files(source_root)
@@ -94,12 +106,14 @@ if __name__ == "__main__":
     
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging (DEBUG level).")
     parser.add_argument("-c", "--config", help="Path to YAML configuration file.")
+    parser.add_argument("--monitor", action="store_true", help="Run in monitoring mode.")
     
+    # Single task arguments
     parser.add_argument("-s", "--src", help="Source directory.")
     parser.add_argument("-d", "--dst", help="Destination directory.")
     parser.add_argument("-t", "--type", help="Type of video: movie, tv, webdl.")
     parser.add_argument("-S", "--soft-link", action="store_true", help="Create soft links.")
-    parser.add_argument("--sub-folder", help="Subfolder name within destination (default depends on type).")
+    parser.add_argument("--sub-folder", help="Subfolder name within destination.")
     parser.add_argument("--db", default="pal_database.yaml", help="Database file path.")
     
     parser.add_argument("--llm-api-key", help="API key for CLI LLM.")
@@ -114,6 +128,9 @@ if __name__ == "__main__":
     
     db_cache = {}
     global_providers = {}
+    
+    # 1. Collect all tasks
+    tasks_to_run = []
 
     if args.config:
         if not os.path.exists(args.config):
@@ -125,20 +142,22 @@ if __name__ == "__main__":
             
         defaults = config.get("defaults", {})
         global_providers = config.get("providers", {})
-        tasks = config.get("tasks", [])
+        raw_tasks = config.get("tasks", [])
         
-        for task in tasks:
+        for task in raw_tasks:
             merged_task = defaults.copy()
             merged_task.update(task)
-            run_task(merged_task, db_cache, global_providers)
+            tasks_to_run.append(merged_task)
             
     else:
         if not args.src or not args.dst or not args.type:
-            parser.error("src, dst, and type are required unless -c/--config is used.")
+            # Only if not monitor? No, src/dst required for single run too
+            if not args.monitor: # Monitor might run empty? No, needs config.
+                 parser.error("src, dst, and type are required unless -c/--config is used.")
             
         task_config = vars(args)
         
-        if isinstance(task_config["type"], str) and task_config["type"].isdigit():
+        if isinstance(task_config.get("type"), str) and task_config["type"].isdigit():
             task_config["type"] = int(task_config["type"])
 
         if args.llm_api_key:
@@ -156,4 +175,28 @@ if __name__ == "__main__":
         else:
             task_config["chain"] = ["guessit"]
 
-        run_task(task_config, db_cache, global_providers)
+        # Only add if src is present (might be missing if user just typed --monitor without args which is invalid but handled)
+        if task_config.get("src"):
+            tasks_to_run.append(task_config)
+
+    if not tasks_to_run:
+        logger.error("No tasks configured.")
+        exit(1)
+
+    # 2. Execution Mode
+    if args.monitor:
+        logger.info("Starting Monitor Mode...")
+        manager = MonitorManager(db_cache)
+        
+        for task_config in tasks_to_run:
+            # Prepare returns (TaskConfig, DB, PluginClass)
+            result = prepare_task(task_config, db_cache, global_providers)
+            if result:
+                task_args, db, _ = result
+                manager.add_task(task_args, db)
+        
+        manager.start() # Blocks
+    else:
+        # Run Once Mode
+        for task_config in tasks_to_run:
+            run_task_once(task_config, db_cache, global_providers)
