@@ -72,6 +72,7 @@ class StatsResponse(BaseModel):
 
 class MetadataUpdate(BaseModel):
     full_path: str
+    source_root: str
     metadata: Dict[str, Any]
 
 # --- Helpers ---
