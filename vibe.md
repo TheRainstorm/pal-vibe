@@ -129,7 +129,6 @@ fix1: 1）能不能把监听 src 和 监听 dst 分开成两个选项来单独�
 
 
 
-
 feat:
 
 1. 识别错误时，将文件添加到数据库专门一个错误列表中，方便用户查看和修改。扫描时，跳过错误列表中的文件。
@@ -181,6 +180,9 @@ fix:
 2. base.py:process_file:127-129 会判断 db_entry.get("source_root") 是否等于当前 source_roo太，但是实际 db_entry.get("source_root") 不存在，导致反复 Updating source_root for {filepath}，我我删除了该部分
 3. server.py:update_metadata 中错误的更新了数据库为新 hash，导致 plugin.process_file 中判断 hash 不一致时，清理旧的连接目录功能失效，我已修复。
 
-
 进阶需求2：支持读取 jellyfin 刮削出来的 nfo 和海报图片。在 webui 中展示一个类似的媒体库，点击对应电影，可以展示扫描的元信息，并支持修改。
 
+
+## stage2
+
+1. 现在已经又很多功能了，能不能写一个 readme.md 介绍整个项目，并提供一个 quick start 指南
