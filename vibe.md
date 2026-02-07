@@ -253,3 +253,50 @@ r3. movie batch 处理
 
 4. 重构 base
 （1）重复运行时，如果一个文件被判定成需要提取元信息（新文件、存在的文件但是有 error 且需要 retry_failed），此时走新文件流程即可（extract meta, extract ffmpeg, link）
+
+  深度分析 `src/plugins/base.py` 的重构 (基于 `git diff HEAD~2`)
+
+  您对 base.py 进行了彻底的改造，核心在于将批量处理逻辑完全通用化，使得子类（Movie, TV）只需要关注特定的“分组”和“提取”实现细节，而不再需要关心流程控制。
+
+  关键变更点总结：
+
+   1. 统一的 `process_files` 入口:
+       * 逻辑：遍历文件列表 -> 检查 DB -> 区分“需提取”和“无需提取”的文件。
+       * 优化: 对于“无需提取”（DB已存在且无误）的文件，不再进入分组逻辑，而是直接调用 _process_existing_db_entry 处理。
+       * 仅对“需提取”文件进行分组: batches = self._group_files(files_to_extract)。这极大地优化了效率，避免了对大量已处理文件进行无效的分组操作。
+
+   2. 标准化的 `_extract_batch_metadata`:
+       * 输入: 接收 filenames (绝对路径列表) 和 context。
+       * 处理: 遍历 Chain -> 调用 guessit 或 llm -> 验证 (_validate_batch) -> 合并结果。
+       * 标准化输出: 无论子类如何实现，该方法最终返回 { abs_path: metadata }。
+       * 通用 LLM 调用: 引入了 _get_batch_llm_prompt(base_filenames) 模板方法。这意味着对于大多数插件，只需要提供 Prompt 模板，而不需要重写整个 LLM 调用逻辑。
+
+   3. 模板方法重组:
+       * _get_batch_llm_prompt(filenames): 新增。子类实现此方法提供 Prompt。
+       * _fix_extracted_metadata(meta): 新增。用于统一处理类型转换（如 season/episode 转 int）和默认值（如 type）。
+       * _map_guessit_to_metadata: 保持。
+
+   4. `TVPlugin` 的特殊性被“规训”:
+       * 虽然 TVPlugin 仍然 override 了 _extract_batch_metadata 和 _extract_batch_llm (因为需要 rel_dir 上下文)，但其结构和返回值现在被严格约束为与基类一致（返回绝对路径 Key）。
+       * TVPlugin 复用了 _fix_extracted_metadata 来进行 int 转换，减少了重复代码。
+
+   5. `_process_batch` 的简化:
+       * 由于筛选逻辑移到了 process_files，_process_batch 现在只负责：
+           1. 调用 _extract_batch_metadata 获取结果。
+           2. 遍历文件，调用 _process_new_metadata。
+       * 它不再处理 DB 存在的逻辑，专注处理新数据。
+
+   6. `_apply_file_logic` 拆分:
+       * 被拆分为 _process_existing_db_entry (处理 DB 命中) 和 _process_new_metadata (处理新提取的数据)。
+       * 逻辑更加清晰，不再是一个巨大的 if/else 块。
+
+  结论：
+
+  这次重构极大地提升了代码质量。base.py 现在不仅仅是一个包含公共方法的类，它真正定义了一个处理框架 (Framework)。子类只需要“填空”（实现 _group_files, _get_batch_llm_prompt 等），就能自动获得高效的批量处理、DB 缓存、哈希校验和错误恢复能力。
+
+r4. webui 改进
+1. 现在 web 只有启动时会读取 db 文件。（1）当我手动更新 db 后，重新加载页面不会变化 （2）web 触发 scan 也不会变化，貌似用的还是旧的 db 数据。能不能增加一个按钮，触发重新读取 db 然后刷新页面。
+
+2. 为了方便修改，我希望 source view 能够
+1）可以修改多个文件元信息，前端记住修改，然后最后一次性提交
+2）可以多选文件，然后批量修改某一个元信息（如 title, season）。多选文件可以支持 shift 点击选择连续文件，ctrl 点击选择不连续文件。还有每个子目录级别的全选，全不选功能。

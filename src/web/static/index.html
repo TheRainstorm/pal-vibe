@@ -26,10 +26,11 @@
             </div>
 
             <!-- Stats Summary -->
-            <div class="flex gap-4 text-sm">
+            <div class="flex gap-4 text-sm items-center">
                 <div>Src: <b>{{ stats.src_files_count }}</b></div>
                 <div>Linked: <b class="text-green-600">{{ stats.dst_files_count }}</b></div>
                 <div>Errors: <b class="text-red-600">{{ stats.error_files_count }}</b></div>
+                <button @click="reloadAll" class="bg-gray-700 text-white px-3 py-1 rounded hover:bg-gray-600 ml-2">Reload DB</button>
             </div>
         </header>
 
@@ -277,6 +278,23 @@
                     }
                 };
 
+                const reloadAll = async () => {
+                    if(!confirm("Reload configuration and databases from disk?")) return;
+                    try {
+                        await fetch('/api/reload', { method: 'POST' });
+                        alert("Reload complete!");
+                        // Refresh everything
+                        selectedTask.value = null;
+                        srcFileTree.value = [];
+                        fetchTasks();
+                        fetchStats();
+                        fetchErrors();
+                        fetchDstTree();
+                    } catch(e) {
+                        alert("Reload failed");
+                    }
+                };
+
                 const selectFile = (node) => {
                     selectedFile.value = node;
                     editMetadata.value = node.metadata ? JSON.parse(JSON.stringify(node.metadata)) : {};
@@ -379,7 +397,7 @@
                 return {
                     viewMode, stats, tasks, selectedTask, srcFileTree, dstFileTree, errorList, 
                     selectedFile, selectedDstNode, editMetadata, showErrorPanel,
-                    selectTask, triggerScan, selectFile, selectDstNode, saveMetadata,
+                    selectTask, triggerScan, reloadAll, selectFile, selectDstNode, saveMetadata,
                     isTVSeries, groupEpisodes
                 };
             }

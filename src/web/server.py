@@ -148,115 +148,124 @@ def build_file_tree_from_paths(paths: List[str], root_path: str, db: VideoDataba
 def build_dst_tree() -> List[FileNode]:
     """
     Reconstructs the destination file tree based on all DB entries.
-    Grouping by Task is hard because multiple tasks might output to same DST structure.
-    So we build a unified tree based on target_paths.
+    Builds tree relative to each Task's configured DST directory.
     """
     tree = []
     
-    # Collect all valid target paths from all DBs
-    # Map target_path -> (source_path, metadata, error, db_instance)
-    file_map = {} 
+    # Collect all valid target files
+    file_list = []
     
     for task in state.tasks:
         db_path = task.get("db", "pal_database.yaml")
         db = state.db_cache.get(os.path.normpath(db_path))
         src_root = task.get("src")
+        task_dst = os.path.normpath(task.get("dst"))
         
         if db and src_root:
             files = db.get_files_by_source_root(src_root)
             for f in files:
                 entry = db.get_video_entry(src_root, f)
                 target = entry.get("target_path")
-                if target:
-                    file_map[target] = {
-                        "source_path": f,
+                if target and os.path.isabs(target):
+                    file_list.append({
+                        "target": target,
+                        "source": f,
                         "metadata": entry.get("metadata"),
-                        "error": entry.get("error")
-                    }
+                        "error": entry.get("error"),
+                        "task_dst": task_dst
+                    })
 
-    # Sort keys
-    sorted_targets = sorted(file_map.keys())
-    
-    # We need a common root to make relative paths? 
-    # Or just assume absolute paths and build tree from root?
-    # Since dst paths might be on different drives, we can't easily relpath.
-    # But usually they share a common prefix if config is sane.
-    # Let's verify common prefix.
-    if not sorted_targets:
-        return []
-        
-    common_prefix = os.path.commonpath(sorted_targets)
-    # If common prefix is file system root or empty, tree might be messy.
-    # But let's use it as base.
-    if os.path.isfile(common_prefix): # Single file case
-        common_prefix = os.path.dirname(common_prefix)
+    # Sort to ensure consistent order
+    file_list.sort(key=lambda x: x["target"])
 
-    for full_target in sorted_targets:
-        data = file_map[full_target]
-        try:
-            rel_path = os.path.relpath(full_target, common_prefix)
-        except ValueError:
-            # Different drive? Just show full path as name at root level
-            rel_path = full_target
-            
-        parts = rel_path.split(os.sep)
-        filename = parts[-1]
+    def insert_node(root_list, path_parts, file_data):
+        current_level = root_list
+        current_rel_path = ""
         
-        current_children = tree
-        current_full_path_dir = common_prefix
-        
-        for part in parts[:-1]:
-            current_full_path_dir = os.path.join(current_full_path_dir, part)
+        for i, part in enumerate(path_parts):
+            is_file = (i == len(path_parts) - 1)
+            current_rel_path = os.path.join(current_rel_path, part)
             
-            found = False
-            for node in current_children:
-                if node.name == part and node.type == 'folder':
-                    current_children = node.children
-                    found = True
+            # Find existing node
+            found_node = None
+            for node in current_level:
+                if node.name == part and node.type == ('file' if is_file else 'folder'):
+                    found_node = node
                     break
             
-            if not found:
-                new_node = FileNode(
-                    id=current_full_path_dir,
-                    name=part,
-                    path=part, # Just name
-                    full_path=current_full_path_dir,
-                    type='folder',
-                    children=[]
-                )
-                current_children.append(new_node)
-                current_children = new_node.children
-        
-        node = FileNode(
-            id=full_target,
-            name=filename,
-            path=rel_path,
-            full_path=full_target,
-            type='file',
-            metadata=data["metadata"],
-            error=data["error"],
-            status="linked", # If it's in target map, it's theoretically linked
-            source_path=data["source_path"]
-        )
-        current_children.append(node)
-        
+            if not found_node:
+                if is_file:
+                    new_node = FileNode(
+                        id=file_data["target"],
+                        name=part,
+                        path=current_rel_path,
+                        full_path=file_data["target"],
+                        type='file',
+                        metadata=file_data["metadata"],
+                        error=file_data["error"],
+                        status="linked",
+                        source_path=file_data["source"]
+                    )
+                else:
+                    new_node = FileNode(
+                        id=f"folder:{current_rel_path}", 
+                        name=part,
+                        path=current_rel_path,
+                        full_path=current_rel_path, 
+                        type='folder',
+                        children=[]
+                    )
+                current_level.append(new_node)
+                found_node = new_node
+            
+            if not is_file:
+                current_level = found_node.children
+
+    for item in file_list:
+        try:
+            # Calculate relative path from the Task's DST root
+            rel = os.path.relpath(item["target"], item["task_dst"])
+            if rel.startswith(".."): 
+                continue
+            
+            parts = rel.split(os.sep)
+            insert_node(tree, parts, item)
+        except ValueError:
+            pass
+
     return tree
 
 # --- Endpoints ---
 
 @app.on_event("startup")
 async def startup_event():
+    await reload_all()
+
+@app.post("/api/reload")
+async def reload_all():
+    """Reload config and all databases from disk."""
+    logger.info("Reloading configuration and databases...")
+    
+    # Reload Config
     if os.path.exists(state.config_path):
         providers, tasks = load_configuration(state.config_path)
         state.tasks = tasks
         state.global_providers = providers
-        # Pre-load DBs
-        for task in tasks:
-            db_path = task.get("db", "pal_database.yaml")
-            get_db_instance(db_path, state.db_cache)
-        logger.info(f"Loaded {len(state.tasks)} tasks.")
     else:
         logger.warning("No config.yaml found.")
+        state.tasks = []
+
+    # Reload DBs
+    # Re-initialize cache based on new tasks, but also reload existing ones
+    for task in state.tasks:
+        db_path = task.get("db", "pal_database.yaml")
+        get_db_instance(db_path, state.db_cache)
+        
+    for db in state.db_cache.values():
+        db.reload()
+        
+    logger.info("Reload complete.")
+    return {"status": "reloaded", "tasks": len(state.tasks)}
 
 @app.get("/api/tasks", response_model=List[TaskInfo])
 async def get_tasks():
@@ -373,8 +382,8 @@ async def trigger_scan(task_id: int):
                     remove_link_and_empty_dirs(entry["target_path"])
                 db.remove_entry(args.src, sf)
         
-        for f in found_files:
-            plugin.process_file(f, args.src)
+        # Process using new batch logic
+        plugin.process_files(found_files, args.src)
             
         return {"status": "success", "files_scanned": len(found_files)}
         

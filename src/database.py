@@ -10,35 +10,14 @@ class VideoDatabase:
         self.db_path = db_path
         self.data = self._load_database()
         
-        # Structure migration: Flat 'files' -> Nested 'roots'
-        if "files" in self.data and self.data["files"]:
-            logger.info("Migrating database to relative path structure...")
-            if "roots" not in self.data:
-                self.data["roots"] = {}
-            
-            for abs_path, entry in self.data["files"].items():
-                src_root = entry.get("source_root")
-                if not src_root: continue # Skip corrupted entries
-                
-                # Ensure root entry exists
-                if src_root not in self.data["roots"]:
-                    self.data["roots"][src_root] = {"files": {}, "dst_root": ""} # dst_root unknown during migration, logic handles empty
-                
-                try:
-                    rel_path = os.path.relpath(abs_path, src_root)
-                    
-                    self.data["roots"][src_root]["files"][rel_path] = {
-                        "metadata": entry.get("metadata"),
-                        "metadata_hash": entry.get("metadata_hash"),
-                        "target": entry.get("target_path"), # Potentially absolute, will be fixed on next run
-                        "error": entry.get("error")
-                    }
-                except ValueError:
-                    logger.warning(f"Skipping migration for {abs_path}: path not within source root {src_root}")
-            
-            del self.data["files"]
-            self._save_database()
+        # Ensure roots structure exists
+        if "roots" not in self.data:
+            self.data["roots"] = {}
 
+    def reload(self):
+        """Force reload data from disk."""
+        logger.info(f"Reloading database from {self.db_path}")
+        self.data = self._load_database()
         if "roots" not in self.data:
             self.data["roots"] = {}
 
