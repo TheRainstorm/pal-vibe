@@ -76,6 +76,9 @@ class MetadataUpdate(BaseModel):
     source_root: str
     metadata: Dict[str, Any]
 
+class BatchMetadataUpdate(BaseModel):
+    updates: List[MetadataUpdate]
+
 # --- Helpers ---
 def build_file_tree_from_paths(paths: List[str], root_path: str, db: VideoDatabase) -> List[FileNode]:
     tree = []
@@ -391,12 +394,9 @@ async def trigger_scan(task_id: int):
         logger.error(f"Scan error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/file/update")
-async def update_metadata(update: MetadataUpdate):
+async def _process_metadata_update(update: MetadataUpdate):
     # Find which task owns this file
-    target_task = None
     task_config = None
-    
     for task in state.tasks:
         if task.get("src") == update.source_root:
             task_config = task
@@ -410,20 +410,20 @@ async def update_metadata(update: MetadataUpdate):
                 break
     
     if not task_config:
-        raise HTTPException(status_code=404, detail="Source root configuration not found for this file")
+        raise Exception(f"Source root configuration not found for {update.full_path}")
 
     db_path = task_config.get("db", "pal_database.yaml")
     db = state.db_cache.get(os.path.normpath(db_path))
     
     if not db:
-        raise HTTPException(status_code=500, detail="Database not loaded")
+        raise Exception("Database not loaded")
 
     entry = db.get_video_entry(update.source_root, update.full_path)
 
     # Instantiate plugin
     result = prepare_and_check_task(task_config, state.db_cache, state.global_providers)
     if not result:
-        raise HTTPException(status_code=500, detail="Plugin load failed")
+        raise Exception("Plugin load failed")
     
     args, _, PluginClass = result
     plugin = PluginClass(db, args)
@@ -442,8 +442,30 @@ async def update_metadata(update: MetadataUpdate):
     )
     
     plugin.process_file(update.full_path, update.source_root)
+
+@app.post("/api/file/update")
+async def update_metadata(update: MetadataUpdate):
+    try:
+        await _process_metadata_update(update)
+        return {"status": "updated"}
+    except Exception as e:
+        logger.error(f"Update failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/files/batch_update")
+async def batch_update_metadata(batch: BatchMetadataUpdate):
+    count = 0
+    errors = []
+    for update in batch.updates:
+        try:
+            await _process_metadata_update(update)
+            count += 1
+        except Exception as e:
+            errors.append(f"{os.path.basename(update.full_path)}: {str(e)}")
     
-    return {"status": "updated"}
+    if errors:
+        return {"status": "partial_success", "updated": count, "errors": errors}
+    return {"status": "success", "updated": count}
 
 if __name__ == "__main__":
     import uvicorn
