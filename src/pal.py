@@ -99,12 +99,8 @@ def run_task_once(task_config, db_cache, global_providers):
     if not found_files:
         logger.warning("No video files found in source directory.")
 
-    # Batch Processing Logic
-    batches = plugin.group_files(found_files)
-    logger.info(f"Processing {len(batches)} batches...")
-    
-    for batch in batches:
-        plugin.process_batch(batch, source_root)
+    # Process all files
+    plugin.process_files(found_files, source_root)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Scan and link video files for Jellyfin.")

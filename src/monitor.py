@@ -156,10 +156,7 @@ class MonitorManager:
         
         plugin = self.get_plugin(task_config, db)
         if plugin:
-            # Use the new batching logic!
-            batches = plugin.group_files(filepaths)
-            for batch in batches:
-                plugin.process_batch(batch, task_config.src)
+            plugin.process_files(filepaths, task_config.src)
 
     def handle_delete(self, target_path, ctx):
         logger.info(f"[Monitor] Link deleted: {target_path}")
