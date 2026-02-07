@@ -26,6 +26,9 @@ class TVPlugin(BaseVideoPlugin):
             if filename in self.batch_cache[dirname]:
                 logger.debug(f"Cached metadata hit")
                 return self.batch_cache[dirname][filename]
+            else:
+                logger.warning(f"Cached metadata miss for file in cached dir")
+                return {}
         
         # Cache miss: Trigger batch processing for this directory
         # Find all sibling video files
@@ -55,7 +58,7 @@ class TVPlugin(BaseVideoPlugin):
         chain = getattr(self.args, 'chain', ['guessit'])
         providers = getattr(self.args, 'providers', {})
         
-        results = {}
+        results = {}  # { filename: metadata }
 
         for processor_name in chain:
             processor_name = processor_name.strip()
@@ -70,22 +73,36 @@ class TVPlugin(BaseVideoPlugin):
                     logger.info(f"Batch LLM ({processor_name}) for {len(siblings)} files in '{rel_dir}'")
                     results = self._extract_batch_llm(rel_dir, siblings, config)
             elif processor_name == "cli_llm" and getattr(self.args, "llm_api_key", None):
-                 config = {
-                     "api_key": self.args.llm_api_key,
-                     "base_url": self.args.llm_api_base,
-                     "model": self.args.llm_model
-                 }
-                 logger.info(f"Batch CLI LLM for {len(siblings)} files in '{rel_dir}'")
-                 results = self._extract_batch_llm(rel_dir, siblings, config)
-
+                config = {
+                    "api_key": self.args.llm_api_key,
+                    "base_url": self.args.llm_api_base,
+                    "model": self.args.llm_model
+                }
+                logger.info(f"Batch CLI LLM for {len(siblings)} files in '{rel_dir}'")
+                results = self._extract_batch_llm(rel_dir, siblings, config)
+            succ, ratio = self._validate_batch(results)
+            logger.info(f"{processor_name} valid ratio: {ratio:.0%}")
+            if succ:
+                break
         # Update cache
         if results:
             self.batch_cache[dirname] = results
             return results.get(filename, {})
         else:
-            # If all failed, store empty to avoid re-scanning? 
+            # If all failed, store empty to avoid re-scanning?
             self.batch_cache[dirname] = results
             return {}
+
+    def _validate_batch(self, results):
+        # If at least 50% of files have valid metadata, consider batch success
+        if not results: return False, 0
+        valid_count = 0
+        total_count = len(results)
+        for meta in results.values():
+            if self._validate_metadata(meta)[0]:
+                valid_count += 1
+        ratio = valid_count / total_count if total_count > 0 else 0
+        return ratio >= 0.5, ratio
 
     def _extract_batch_llm(self, rel_dir, filenames, config):
         api_key = config.get("api_key")
@@ -102,6 +119,7 @@ class TVPlugin(BaseVideoPlugin):
         prompt += "Each metadata object must have: title (series name), season (int, default 1), episode (int), type='TV'. "
         prompt += "Do not include any markdown formatting, just the raw JSON."
 
+        results = {fname:{} for fname in filenames}
         try:
             chat_completion = client.chat.completions.create(
                 model=model,
@@ -115,18 +133,21 @@ class TVPlugin(BaseVideoPlugin):
                 content = content.split("```")[1].strip()
             
             data = json.loads(content)
-            if not isinstance(data, dict): return {}
+            if not isinstance(data, dict): return results
             
             # Normalize int types
             for k, v in data.items():
-                if v:
-                    if isinstance(v.get("season"), str) and v["season"].isdigit(): v["season"] = int(v["season"])
-                    if isinstance(v.get("episode"), str) and v["episode"].isdigit(): v["episode"] = int(v["episode"])
-            
-            return data
+                if k in filenames:
+                    if v:
+                        if isinstance(v.get("season"), str) and v["season"].isdigit(): v["season"] = int(v["season"])
+                        if isinstance(v.get("episode"), str) and v["episode"].isdigit(): v["episode"] = int(v["episode"])
+                        results[k] = v
+                else:
+                    logger.warning(f"LLM returned unexpected filename key: {k}")
+            return results
         except Exception as e:
             logger.error(f"LLM Batch Error: {e}")
-            return {}
+            return results
 
     def _extract_batch_guessit(self, rel_dir, filenames):
         results = {}

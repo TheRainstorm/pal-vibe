@@ -53,6 +53,7 @@ class VideoDatabase:
         return {}
 
     def _save_database(self):
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         try:
             with open(self.db_path, 'w', encoding='utf-8') as f:
                 yaml.safe_dump(self.data, f, allow_unicode=True, default_flow_style=False)
