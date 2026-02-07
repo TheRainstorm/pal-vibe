@@ -44,6 +44,10 @@ def prepare_task(task_config, db_cache, global_providers):
     if "monitor_dst" not in task_config:
         task_config["monitor_dst"] = False 
 
+    # Default Batch Size: 26
+    if "batch_size" not in task_config:
+        task_config["batch_size"] = 26
+
     args = TaskConfig(**task_config)
 
     type_map = {
@@ -99,7 +103,6 @@ def run_task_once(task_config, db_cache, global_providers):
     if not found_files:
         logger.warning("No video files found in source directory.")
 
-    # Process all files
     plugin.process_files(found_files, source_root)
 
 if __name__ == "__main__":
@@ -108,14 +111,16 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging (DEBUG level).")
     parser.add_argument("-c", "--config", help="Path to YAML configuration file.")
     parser.add_argument("--monitor", action="store_true", help="Run in monitoring mode.")
+    parser.add_argument("--retry-failed", action="store_true", help="Retry files previously marked as errors even if hash matches.")
     
+    # Single task arguments
     parser.add_argument("-s", "--src", help="Source directory.")
     parser.add_argument("-d", "--dst", help="Destination directory.")
     parser.add_argument("-t", "--type", help="Type of video: movie, tv, webdl.")
     parser.add_argument("-S", "--soft-link", action="store_true", help="Create soft links.")
     parser.add_argument("--sub-folder", help="Subfolder name within destination.")
     parser.add_argument("--db", default="pal_database.yaml", help="Database file path.")
-    parser.add_argument("--batch-size", type=int, default=10, help="Batch size for metadata extraction.")
+    parser.add_argument("--batch-size", type=int, default=26, help="Batch size for metadata extraction.")
     
     parser.add_argument("--llm-api-key", help="API key for CLI LLM.")
     parser.add_argument("--llm-api-base", default="https://api.openai.com/v1", help="LLM API Base URL.")
@@ -143,6 +148,10 @@ if __name__ == "__main__":
         defaults = config.get("defaults", {})
         global_providers = config.get("providers", {})
         raw_tasks = config.get("tasks", [])
+        
+        # Inject CLI override for retry
+        if args.retry_failed:
+            defaults["retry_failed"] = True
         
         for task in raw_tasks:
             merged_task = defaults.copy()

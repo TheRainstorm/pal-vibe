@@ -12,12 +12,10 @@ class TVPlugin(BaseVideoPlugin):
     def get_type_name(self):
         return "TV"
 
+    # Override: Group by Series Directory
     def _group_files(self, filepaths):
-        """
-        Group files by Series Directory (1st level subdir relative to src).
-        """
         source_root = getattr(self.args, "src")
-        groups = {} # { series_rel_path: [abs_filepaths] }
+        groups = {} 
         
         for f in filepaths:
             try:
@@ -26,7 +24,7 @@ class TVPlugin(BaseVideoPlugin):
                 if len(parts) > 1:
                     series_dir = parts[0]
                 else:
-                    series_dir = "." # Root files
+                    series_dir = "." 
                 
                 if series_dir not in groups:
                     groups[series_dir] = []
@@ -34,26 +32,21 @@ class TVPlugin(BaseVideoPlugin):
             except ValueError:
                 pass
 
-        batch_size = getattr(self.args, 'batch_size', 10)
-        if batch_size is None or batch_size <= 0: batch_size = 10
+        batch_size = getattr(self.args, 'batch_size', 26)
+        if batch_size is None or batch_size <= 0: batch_size = 26
         
         final_batches = []
         for series_dir, files in groups.items():
             files.sort()
-            # Chunking
             for i in range(0, len(files), batch_size):
                 chunk = files[i : i + batch_size]
-                # Context: rel_dir is the series directory relative to src
                 context = {'series_dir': series_dir, 'source_root': source_root}
                 final_batches.append({'files': chunk, 'context': context})
         
         return final_batches
 
-    def extract_batch_metadata(self, filenames, context):
-        """
-        Override to handle relative paths from Series Directory.
-        filenames: list of absolute paths
-        """
+    # Override: Process batch with relative path context logic
+    def _extract_batch_metadata(self, filenames, context):
         series_dir = context.get('series_dir')
         source_root = context.get('source_root')
         
@@ -84,7 +77,7 @@ class TVPlugin(BaseVideoPlugin):
             current_results = {}
             
             if processor_name == 'guessit':
-                logger.info(f"Batch GuessIt for {len(target_filenames)} files in {series_dir}")
+                logger.debug(f"Batch GuessIt for {len(target_filenames)} files in {series_dir}")
                 current_results = self._extract_batch_guessit(base_dir, target_filenames)
             
             elif processor_name in providers:
@@ -103,8 +96,13 @@ class TVPlugin(BaseVideoPlugin):
                  current_results = self._extract_batch_llm(series_dir, target_filenames, config)
 
             if current_results:
-                succ, _ = self._validate_batch(current_results)
-                if succ:
+                valid_count = 0
+                for r_path, meta in current_results.items():
+                    if self._validate_metadata(meta)[0]:
+                        valid_count += 1
+                
+                # Check ratio
+                if valid_count > 0 and (valid_count / len(target_filenames) >= 0.5):
                     raw_results = current_results
                     break
         
@@ -114,17 +112,13 @@ class TVPlugin(BaseVideoPlugin):
             if rel in rel_to_abs:
                 final_results[rel_to_abs[rel]] = meta
         
+        # Base class process_batch logic expects {basename: meta} OR it checks full path.
+        # BaseVideoPlugin._process_batch:
+        # meta = extraction_results.get(os.path.basename(f))
+        # if not meta: meta = extraction_results.get(f)
+        # So returning {abs_path: meta} works perfectly.
+        
         return final_results
-
-    def _validate_batch(self, results):
-        if not results: return False, 0
-        valid_count = 0
-        total_count = len(results)
-        for meta in results.values():
-            if self._validate_metadata(meta)[0]:
-                valid_count += 1
-        ratio = valid_count / total_count if total_count > 0 else 0
-        return ratio >= 0.5, ratio
 
     def _extract_batch_llm(self, rel_dir, filenames, config):
         api_key = config.get("api_key")
