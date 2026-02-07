@@ -186,3 +186,23 @@ fix:
 ## stage2
 
 1. 现在已经又很多功能了，能不能写一个 readme.md 介绍整个项目，并提供一个 quick start 指南
+2. 现在 TV 的集数识别不够准确。我希望重构 TV 的处理逻辑。下载路径的 TV 通常只有这几种结构：
+1）src_top_dir/series_season_X/series_ep_Y.mkv
+2）src_top_dir/series/season_X/series_ep_Y
+3）src_top_dir/searies_season_X_ep_Y.mkv。
+
+1）位于一个目录下（处理顶层目录）的视频都是同一 series
+2）有 series 目录时，可以将将包含目录名的路径一起给 guessit/llm 处理，从而提取更准确的元信息
+3）对于 llm，最好把一个 series_season 下所有文件名一起交给它处理，从而可以利用上下文更好地提取 title, season, episode 信息。要考虑如何让 llm 处理并返回多个文件的元数据。
+
+
+webui 部分：
+
+1）src 文件视角
+现在展示的是从 src 文件的视角。展示了所有源视频文件的树形结构，对于识别错误的用红色标出来了，这很好。
+我希望在页面底部再增加一栏只显示错误文件的树状结构，方便用户快速定位和修改错误文件。
+
+2）dst 文件视角
+（1）我希望增加一个 Tab，展示 dst 目录下的文件结构（media library 视角）。点击某个文件，可以展示该文件对应的源文件路径和元信息，并支持修改。修改后，触发重新链接该文件。
+
+（2））对于一个 TV series，我希望可以直接展示识别到了哪些 season 和 episode，展示为一个小方块不用显式列出文件名（占的空间太大了）。用户点击某一个 episode 方块，可以展示该集的元信息。集数应该是连贯的。对于不连贯的第一个集数，应该标记为红色。

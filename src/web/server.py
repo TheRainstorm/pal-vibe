@@ -1,5 +1,7 @@
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional, Any
 import os
@@ -15,9 +17,6 @@ from src.metadata import scan_video_files
 # Setup logging
 setup_logging(verbose=True)
 logger = get_logger(__name__)
-
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
 
 app = FastAPI(title="PAL Vibe Web UI")
 
@@ -63,6 +62,8 @@ class FileNode(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     status: Optional[str] = None # 'linked', 'missing', 'error', 'scanned'
+    # Extra for DST view
+    source_path: Optional[str] = None
 
 class StatsResponse(BaseModel):
     src_files_count: int
@@ -78,10 +79,6 @@ class MetadataUpdate(BaseModel):
 # --- Helpers ---
 def build_file_tree_from_paths(paths: List[str], root_path: str, db: VideoDatabase) -> List[FileNode]:
     tree = []
-    # Map: path -> node children list
-    dir_map = {"": tree} 
-
-    # Sort paths to ensure folders created before files (though not strictly necessary with logic below)
     # Convert to relative paths
     rel_paths = []
     for p in paths:
@@ -96,7 +93,6 @@ def build_file_tree_from_paths(paths: List[str], root_path: str, db: VideoDataba
     for rel_path, full_path in rel_paths:
         parts = rel_path.split(os.sep)
         filename = parts[-1]
-        parent_path = os.sep.join(parts[:-1])
         
         # Ensure parent dirs exist in tree
         current_rel_parent = ""
@@ -105,7 +101,7 @@ def build_file_tree_from_paths(paths: List[str], root_path: str, db: VideoDataba
         for part in parts[:-1]:
             current_rel_parent = os.path.join(current_rel_parent, part) if current_rel_parent else part
             
-            # Check if this dir node exists in the current children list
+            # Check if this dir node exists
             found = False
             for node in current_children:
                 if node.name == part and node.type == 'folder':
@@ -147,6 +143,103 @@ def build_file_tree_from_paths(paths: List[str], root_path: str, db: VideoDataba
         )
         current_children.append(node)
 
+    return tree
+
+def build_dst_tree() -> List[FileNode]:
+    """
+    Reconstructs the destination file tree based on all DB entries.
+    Grouping by Task is hard because multiple tasks might output to same DST structure.
+    So we build a unified tree based on target_paths.
+    """
+    tree = []
+    
+    # Collect all valid target paths from all DBs
+    # Map target_path -> (source_path, metadata, error, db_instance)
+    file_map = {} 
+    
+    for task in state.tasks:
+        db_path = task.get("db", "pal_database.yaml")
+        db = state.db_cache.get(os.path.normpath(db_path))
+        src_root = task.get("src")
+        
+        if db and src_root:
+            files = db.get_files_by_source_root(src_root)
+            for f in files:
+                entry = db.get_video_entry(src_root, f)
+                target = entry.get("target_path")
+                if target:
+                    file_map[target] = {
+                        "source_path": f,
+                        "metadata": entry.get("metadata"),
+                        "error": entry.get("error")
+                    }
+
+    # Sort keys
+    sorted_targets = sorted(file_map.keys())
+    
+    # We need a common root to make relative paths? 
+    # Or just assume absolute paths and build tree from root?
+    # Since dst paths might be on different drives, we can't easily relpath.
+    # But usually they share a common prefix if config is sane.
+    # Let's verify common prefix.
+    if not sorted_targets:
+        return []
+        
+    common_prefix = os.path.commonpath(sorted_targets)
+    # If common prefix is file system root or empty, tree might be messy.
+    # But let's use it as base.
+    if os.path.isfile(common_prefix): # Single file case
+        common_prefix = os.path.dirname(common_prefix)
+
+    for full_target in sorted_targets:
+        data = file_map[full_target]
+        try:
+            rel_path = os.path.relpath(full_target, common_prefix)
+        except ValueError:
+            # Different drive? Just show full path as name at root level
+            rel_path = full_target
+            
+        parts = rel_path.split(os.sep)
+        filename = parts[-1]
+        
+        current_children = tree
+        current_full_path_dir = common_prefix
+        
+        for part in parts[:-1]:
+            current_full_path_dir = os.path.join(current_full_path_dir, part)
+            
+            found = False
+            for node in current_children:
+                if node.name == part and node.type == 'folder':
+                    current_children = node.children
+                    found = True
+                    break
+            
+            if not found:
+                new_node = FileNode(
+                    id=current_full_path_dir,
+                    name=part,
+                    path=part, # Just name
+                    full_path=current_full_path_dir,
+                    type='folder',
+                    children=[]
+                )
+                current_children.append(new_node)
+                current_children = new_node.children
+        
+        node = FileNode(
+            id=full_target,
+            name=filename,
+            path=rel_path,
+            full_path=full_target,
+            type='file',
+            metadata=data["metadata"],
+            error=data["error"],
+            status="linked", # If it's in target map, it's theoretically linked
+            source_path=data["source_path"]
+        )
+        current_children.append(node)
+        
     return tree
 
 # --- Endpoints ---
@@ -218,18 +311,38 @@ async def get_task_tree(task_id: int):
     
     if not db or not src_root:
         return []
-        
-    # Get all files from DB for this root
+    
     files = db.get_files_by_source_root(src_root)
-    # Also scan disk to find new files not yet in DB?
-    # For now, let's rely on DB + Scan Trigger logic. 
-    # But user wants to see "all source video files".
-    # Combining DB list with Scan list is safer.
-    
-    # Simple approach: Just list from DB. User must click "Scan" to update DB.
-    # This is faster.
-    
     return build_file_tree_from_paths(files, src_root, db)
+
+@app.get("/api/dst/tree")
+async def get_dst_tree():
+    return build_dst_tree()
+
+@app.get("/api/errors")
+async def get_errors():
+    errors = []
+    for task in state.tasks:
+        src_root = task.get("src")
+        db_path = task.get("db", "pal_database.yaml")
+        db = state.db_cache.get(os.path.normpath(db_path))
+        
+        if db and src_root:
+            files = db.get_files_by_source_root(src_root)
+            for f in files:
+                entry = db.get_video_entry(src_root, f)
+                if entry and entry.get("error"):
+                    errors.append(FileNode(
+                        id=f,
+                        name=os.path.basename(f),
+                        path=f, # Show absolute path for errors
+                        full_path=f,
+                        type='file',
+                        metadata=entry.get("metadata"),
+                        error=entry.get("error"),
+                        status="error"
+                    ))
+    return errors
 
 @app.post("/api/scan/{task_id}")
 async def trigger_scan(task_id: int):
@@ -238,10 +351,7 @@ async def trigger_scan(task_id: int):
     
     task_config = state.tasks[task_id]
     
-    # Run task logic synchronously for now (simple)
-    # In prod, this should be a background task
     try:
-        # Prepare params
         result = prepare_task(task_config, state.db_cache, state.global_providers)
         if not result:
             raise HTTPException(status_code=500, detail="Failed to prepare task")
@@ -259,14 +369,10 @@ async def trigger_scan(task_id: int):
             if sf not in found_set and not os.path.exists(sf):
                 entry = db.get_video_entry(args.src, sf)
                 if entry and entry.get("target_path"):
-                    # Import remove logic? Or just call Plugin?
-                    # Plugin doesn't have delete logic exposed nicely.
-                    # Use existing logic from pal.py
                     from src.link_manager import remove_link_and_empty_dirs
                     remove_link_and_empty_dirs(entry["target_path"])
                 db.remove_entry(args.src, sf)
         
-        # Process
         for f in found_files:
             plugin.process_file(f, args.src)
             
@@ -278,25 +384,19 @@ async def trigger_scan(task_id: int):
 
 @app.post("/api/file/update")
 async def update_metadata(update: MetadataUpdate):
-    """
-    Update metadata for a specific file and re-process it.
-    """
     # Find which task owns this file
-    # We iterate tasks to find matching src_root
     target_task = None
     task_config = None
     
     for task in state.tasks:
-        if task.get("src") == update.source_root: # Exact match assumption
+        if task.get("src") == update.source_root:
             task_config = task
             break
             
     if not task_config:
-        # Fallback: check if file starts with src
         for task in state.tasks:
             if update.full_path.startswith(task.get("src")):
                 task_config = task
-                # update.source_root might be wrong if client sent it wrong, correct it
                 update.source_root = task.get("src") 
                 break
     
@@ -309,10 +409,9 @@ async def update_metadata(update: MetadataUpdate):
     if not db:
         raise HTTPException(status_code=500, detail="Database not loaded")
 
-    # Update DB directly
     entry = db.get_video_entry(update.source_root, update.full_path)
 
-    # Instantiate plugin to calculate hash and process
+    # Instantiate plugin
     result = prepare_task(task_config, state.db_cache, state.global_providers)
     if not result:
         raise HTTPException(status_code=500, detail="Plugin load failed")
@@ -330,10 +429,9 @@ async def update_metadata(update: MetadataUpdate):
         update.metadata, 
         old_target, 
         old_hash, 
-        error=None # Clear error on manual update attempt
+        error=None 
     )
     
-    # 2. Trigger process_file to re-link based on new DB data
     plugin.process_file(update.full_path, update.source_root)
     
     return {"status": "updated"}
