@@ -180,6 +180,13 @@
                     <span :class="{'text-red-600 font-medium': node.status === 'error', 'font-bold text-gray-700': node.type === 'folder', 'text-gray-600': node.type === 'file'}">
                         {{ node.name }}
                     </span>
+                    <!-- Metadata Summary -->
+                    <div v-if="node.type === 'file' && node.metadata && node.metadata.title" class="ml-4 flex items-center gap-2 text-[10px] opacity-80 group-hover:opacity-100 transition-opacity">
+                        <span class="text-blue-600 font-semibold px-1 bg-blue-50 rounded">{{ node.metadata.title }}</span>
+                        <span v-if="node.metadata.season !== undefined" class="text-emerald-700 font-mono">S{{ String(node.metadata.season).padStart(2, '0') }}</span>
+                        <span v-if="node.metadata.episode !== undefined" class="text-orange-700 font-mono border-l pl-2 border-gray-300">E{{ String(node.metadata.episode).padStart(2, '0') }}</span>
+                        <span v-if="node.metadata.year" class="text-gray-400">({{ node.metadata.year }})</span>
+                    </div>
                 </div>
                 <div v-if="node.type === 'folder' && node.isOpen" class="border-l border-gray-200 ml-1.5 pl-1">
                     <file-tree :nodes="node.children" @select="$emit('select', $event)"></file-tree>

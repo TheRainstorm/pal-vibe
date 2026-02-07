@@ -206,7 +206,7 @@ webui 部分：
 
 （2））对于一个 TV series，我希望可以直接展示识别到了哪些 season 和 episode，展示为一个小方块不用显式列出文件名（占的空间太大了）。用户点击某一个 episode 方块，可以展示该集的元信息。集数应该是连贯的。对于不连贯的第一个集数，应该标记为红色。
 
-2.fix
+2.fix1
 
 我已修复的，请 git diff HEAD~1 记录我的修改
 1. tv.py 使用了 print 而不是 logger 打印日志，我已修复
@@ -216,3 +216,7 @@ webui 部分：
 3. webui: src 视图显式，树形文件列表时，文件名右侧直接显式显示元信息摘要，比如 title, season, episode 等，方便用户快速查看
 4. logger 增强：1）对齐输出，比如 `WARNING - src.plugins.base` 和 `DEBUG - src.plugins.tv` 长度根本不一样。2）增加一点颜色，能不能有点高亮？现在纯白看起来有点难看。
 5. Library View 对于数据库只有一个 TV series，左边怎么直接展示了 TV episode 文件列表了。应该先显式 series 名称，然后是 season，然后是 episode 列表才对。
+
+2.fix2
+请 git diff HEAD~1 并记录我的修改： 1)我回退掉了 dst view 的修改，因为现在代码还是有问题，并且代码变复杂我也不想修了 2）我又修改了 tv.py 的处理逻辑，添加回了 validate_batch。
+请再修改一下 source view 文件名右侧显示元信息摘要，请分隔开 title, season, episode，否则不太容易阅读。
