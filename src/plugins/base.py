@@ -17,7 +17,7 @@ class BaseVideoPlugin:
     def get_type_name(self):
         raise NotImplementedError
 
-    def extract_filename_metadata(self, filepath):
+    def extract_filename_metadata(self, filepath, source_root=None):
         filename = os.path.basename(filepath)
         chain = getattr(self.args, 'chain', ['guessit'])
         providers = getattr(self.args, 'providers', {})
@@ -163,7 +163,7 @@ class BaseVideoPlugin:
 
         # Step 2: New File
         logger.info(f"New file found: {filepath}")
-        filename_metadata = self.extract_filename_metadata(filepath)
+        filename_metadata = self.extract_filename_metadata(filepath, source_root)
         current_hash = self.calculate_hash(filename_metadata)
         final_metadata = filename_metadata.copy()
 
