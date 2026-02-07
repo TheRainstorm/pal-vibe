@@ -250,3 +250,6 @@ r3. movie batch 处理
 2）base 里面不需要了 _get_llm_prompt 吧？除非你把像_extract_batch_guessit 那样，把 _extract_batch_llm 也拆成 base 中的通用部分，每个 plugin 基本只需要修改 prompt 就好了
 3）base:171-179 的逻辑封装成 _validate_batch，就像之前一样。类似的 pal:141-159 这种也封装成一个函数，让代码更清晰。其它部分也检查一下
 切记不要轻易删除原本比较清晰的注释
+
+4. 重构 base
+（1）重复运行时，如果一个文件被判定成需要提取元信息（新文件、存在的文件但是有 error 且需要 retry_failed），此时走新文件流程即可（extract meta, extract ffmpeg, link）

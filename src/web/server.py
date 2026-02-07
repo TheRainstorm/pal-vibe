@@ -9,7 +9,7 @@ import yaml
 import threading
 
 # Import project modules
-from src.pal import load_configuration, prepare_task, get_db_instance, TaskConfig
+from src.pal import load_configuration, prepare_and_check_task, get_db_instance, TaskConfig
 from src.database import VideoDatabase
 from src.logger import setup_logging, get_logger
 from src.metadata import scan_video_files
@@ -247,7 +247,7 @@ def build_dst_tree() -> List[FileNode]:
 @app.on_event("startup")
 async def startup_event():
     if os.path.exists(state.config_path):
-        defaults, providers, tasks = load_configuration(state.config_path)
+        providers, tasks = load_configuration(state.config_path)
         state.tasks = tasks
         state.global_providers = providers
         # Pre-load DBs
@@ -352,7 +352,7 @@ async def trigger_scan(task_id: int):
     task_config = state.tasks[task_id]
     
     try:
-        result = prepare_task(task_config, state.db_cache, state.global_providers)
+        result = prepare_and_check_task(task_config, state.db_cache, state.global_providers)
         if not result:
             raise HTTPException(status_code=500, detail="Failed to prepare task")
             
@@ -412,7 +412,7 @@ async def update_metadata(update: MetadataUpdate):
     entry = db.get_video_entry(update.source_root, update.full_path)
 
     # Instantiate plugin
-    result = prepare_task(task_config, state.db_cache, state.global_providers)
+    result = prepare_and_check_task(task_config, state.db_cache, state.global_providers)
     if not result:
         raise HTTPException(status_code=500, detail="Plugin load failed")
     

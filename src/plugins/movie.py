@@ -21,10 +21,10 @@ class MoviePlugin(BaseVideoPlugin):
             "type": "Movie"
         }
 
-    def _get_batch_llm_prompt(self, filenames):
+    def _get_batch_llm_prompt(self, context, filenames):
         prompt = f"Extract metadata for these MOVIE files: {json.dumps(filenames)}. "
         prompt += "Return a JSON Object where keys are filenames and values are metadata objects. "
-        prompt += "Each metadata object must have: title (string), year (string), type='Movie'. "
+        prompt += "Each metadata object must have: title (string), year (string). "
         prompt += "Use null for missing fields."
         return prompt
 

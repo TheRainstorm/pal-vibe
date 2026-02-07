@@ -22,7 +22,39 @@ def get_db_instance(db_path, db_cache):
         db_cache[db_path] = VideoDatabase(db_path)
     return db_cache[db_path]
 
-def prepare_task(task_config, db_cache, global_providers):
+def get_global_defaults():
+    # config file defaults
+    return {
+        "db": "pal_database.yaml",
+        "soft_link": True,
+        "batch_size": 26,
+        "retry_failed": False,
+        "monitor_src": False,
+        "monitor_dst": False,
+        "chain": ["guessit"]
+    }
+
+def load_configuration(config_path):
+    if not os.path.exists(config_path):
+        logger.error(f"Config file not found: {config_path}")
+        exit(1)
+        
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    defaults = config.get("defaults", {})
+    providers = config.get("providers", {})
+    raw_tasks = config.get("tasks", [])
+    
+    tasks = []
+    for task in raw_tasks:
+        merged_task = get_global_defaults()
+        merged_task.update(defaults)
+        merged_task.update(task)
+        tasks.append(merged_task)
+    return providers, tasks
+
+def prepare_and_check_task(task_config, db_cache, global_providers):
     if not task_config.get("src") or not task_config.get("dst") or not task_config.get("type"):
         logger.warning(f"Skipping invalid task config: {task_config}")
         return None
@@ -36,18 +68,12 @@ def prepare_task(task_config, db_cache, global_providers):
     if "providers" not in task_config:
         task_config["providers"] = global_providers
 
-    if "chain" not in task_config:
-        task_config["chain"] = ["guessit"]
-
-    if "monitor_src" not in task_config:
-        task_config["monitor_src"] = True
-    if "monitor_dst" not in task_config:
-        task_config["monitor_dst"] = False 
-
-    # Default Batch Size: 26
-    if "batch_size" not in task_config:
-        task_config["batch_size"] = 26
-
+    # check global_defaults keys exist
+    for key, _ in get_global_defaults().items():
+        if key not in task_config:
+            logger.error(f"Missing required task config key: {key}")
+            return None
+    
     args = TaskConfig(**task_config)
 
     type_map = {
@@ -87,7 +113,7 @@ def cleanup_removed_files(db, source_root, current_files_set):
         logger.info(f"Cleaned up {removed_count} removed files.")
 
 def run_task_once(task_config, db_cache, global_providers):
-    result = prepare_task(task_config, db_cache, global_providers)
+    result = prepare_and_check_task(task_config, db_cache, global_providers)
     if not result: return
 
     args, db, PluginClass = result
@@ -117,7 +143,6 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging (DEBUG level).")
     parser.add_argument("-c", "--config", help="Path to YAML configuration file.")
     parser.add_argument("--monitor", action="store_true", help="Run in monitoring mode.")
-    parser.add_argument("--retry-failed", action="store_true", help="Retry files previously marked as errors even if hash matches.")
     
     parser.add_argument("-s", "--src", help="Source directory.")
     parser.add_argument("-d", "--dst", help="Destination directory.")
@@ -126,11 +151,12 @@ if __name__ == "__main__":
     parser.add_argument("--sub-folder", help="Subfolder name within destination.")
     parser.add_argument("--db", default="pal_database.yaml", help="Database file path.")
     parser.add_argument("--batch-size", type=int, default=26, help="Batch size for metadata extraction.")
+    parser.add_argument("--retry-failed", action="store_true", help="Retry files previously marked as errors even if hash matches.")
     
+    parser.add_argument("--chain", help="Comma separated processing chain.")
     parser.add_argument("--llm-api-key", help="API key for CLI LLM.")
     parser.add_argument("--llm-api-base", default="https://api.openai.com/v1", help="LLM API Base URL.")
     parser.add_argument("--llm-model", default="gpt-3.5-turbo", help="LLM Model name.")
-    parser.add_argument("--chain", help="Comma separated processing chain.")
     parser.add_argument("--log-level", help="Set logging level (DEBUG, INFO, WARNING, ERROR).")
 
     args = parser.parse_args()
@@ -139,40 +165,21 @@ if __name__ == "__main__":
     
     db_cache = {}
     global_providers = {}
+    global_defaults = get_global_defaults()
     
     tasks_to_run = []
 
     if args.config:
-        if not os.path.exists(args.config):
-            logger.error(f"Config file not found: {args.config}")
-            exit(1)
-            
-        with open(args.config, 'r') as f:
-            config = yaml.safe_load(f)
-            
-        defaults = config.get("defaults", {})
-        global_providers = config.get("providers", {})
-        raw_tasks = config.get("tasks", [])
-        
-        # Inject CLI override for retry
-        if args.retry_failed:
-            defaults["retry_failed"] = True
-        
-        for task in raw_tasks:
-            merged_task = defaults.copy()
-            merged_task.update(task)
-            tasks_to_run.append(merged_task)
-            
+        providers, tasks = load_configuration(args.config)
+        global_providers.update(providers)
+        tasks_to_run.extend(tasks)
     else:
         if not args.src or not args.dst or not args.type:
-            if not args.monitor:
-                 parser.error("src, dst, and type are required unless -c/--config is used.")
-            
-        task_config = vars(args)
+            parser.error("src, dst, and type are required unless -c/--config is used.")
         
-        if isinstance(task_config.get("type"), str) and task_config["type"].isdigit():
-            task_config["type"] = int(task_config["type"])
-
+        task_config = global_defaults.copy()
+        task_config.update(vars(args))
+        
         if args.llm_api_key:
             global_providers["cli_llm"] = {
                 "type": "llm",
@@ -180,16 +187,11 @@ if __name__ == "__main__":
                 "base_url": args.llm_api_base,
                 "model": args.llm_model
             }
-        
+        # fix cli chain parsing
         if args.chain:
             task_config["chain"] = args.chain.split(',')
-        elif args.llm_api_key:
-            task_config["chain"] = ["guessit", "cli_llm"]
-        else:
-            task_config["chain"] = ["guessit"]
 
-        if task_config.get("src"):
-            tasks_to_run.append(task_config)
+        tasks_to_run.append(task_config)
 
     if not tasks_to_run:
         logger.error("No tasks configured.")
@@ -200,7 +202,7 @@ if __name__ == "__main__":
         manager = MonitorManager(db_cache)
         
         for task_config in tasks_to_run:
-            result = prepare_task(task_config, db_cache, global_providers)
+            result = prepare_and_check_task(task_config, db_cache, global_providers)
             if result:
                 task_args, db, _ = result
                 manager.add_task(task_args, db)

@@ -17,27 +17,21 @@ class BaseVideoPlugin:
     ----------------
     process_files(filepaths)
        |
-       v
-    _group_files(filepaths) -> batches
+       |--> _needs_extraction(file)?
+       |    |
+       |    +-> No -> _process_existing_db_entry -> (Skip extraction)
+       |
+       +--> [*] _group_files(filepaths) -> batches
        |
        v
     Loop over batches:
-       _process_batch(batch)
-          |
-          +--> _needs_extraction(file)?
-          |      |
-          |      +-> Yes -> _extract_batch_metadata(files) -> {abs_path: meta}
-          |      +-> No  -> (Skip extraction)
-          |
-          v
+       +--> _process_batch(batch)
+        |
+        +--> [*] _extract_batch_metadata(files) -> {path: meta}
+        |
+        v
        Loop over files in batch:
-          _apply_file_logic(file, new_metadata)
-             |
-             +--> DB Entry exists?
-             |      |
-             |      +-> Yes -> _process_existing_db_entry(...)
-             |      |
-             |      +-> No -> _process_new_metadata(...)
+          _process_new_metadata(...)
     """
 
     def __init__(self, db, args):
@@ -54,10 +48,19 @@ class BaseVideoPlugin:
     def process_files(self, filepaths, source_root):
         """
         Main entry point. Groups files and processes them in batches.
-        filepaths: List of absolute file paths.
+        filepaths: file paths relative to source_root
         """
-        batches = self._group_files(filepaths)
-        logger.info(f"Processing {len(filepaths)} files in {len(batches)} batches...")
+
+        files_to_extract = []
+        for f in filepaths:
+            db_entry = self.db.get_video_entry(source_root, f)
+            if self._needs_extraction(f, db_entry):
+                files_to_extract.append(f)
+            else:
+                self._process_existing_db_entry(f, db_entry, source_root)
+
+        batches = self._group_files(files_to_extract)
+        logger.info(f"Processing {len(files_to_extract)} files in {len(batches)} batches...")
         
         for batch in batches:
             self._process_batch(batch, source_root)
@@ -86,13 +89,22 @@ class BaseVideoPlugin:
     def _get_batch_llm_prompt(self, filenames):
         """
         Return the prompt for batch LLM extraction.
-        filenames: list of strings (usually basenames) to be included in prompt.
+        filenames: list of strings to be included in prompt.
         """
-        return ""
-
+        raise NotImplementedError
+    
     def _get_guessit_options(self): return {}
     
-    def _map_guessit_to_metadata(self, guess): return dict(guess)
+    def _map_guessit_to_metadata(self, guess):
+        raise NotImplementedError
+
+    def _fix_extracted_metadata(self, meta):
+        """
+        convert integers, etc.
+        """
+        if 'type' not in meta:
+            meta['type'] = self.get_type_name()
+        return meta
     
     def _validate_metadata(self, metadata): 
         if not metadata or not metadata.get("title"):
@@ -111,24 +123,22 @@ class BaseVideoPlugin:
     # =========================================================================
 
     def _process_batch(self, batch_data, source_root):
-        files = batch_data['files'] # Absolute paths
+        files = batch_data['files']
         context = batch_data.get('context', {})
         
-        files_to_extract = []
-        for f in files:
-            if self._needs_extraction(f):
-                files_to_extract.append(f)
-        
-        extraction_results = {}
-        if files_to_extract:
-            extraction_results = self._extract_batch_metadata(files_to_extract, context)
+        results = {}
+        if files:
+            results = self._extract_batch_metadata(files, context)
         
         for f in files:
-            # Strictly use absolute path as key
-            meta = extraction_results.get(f) 
-            self._apply_file_logic(f, meta, source_root)
+            meta = results.get(f) 
+            self._process_new_metadata(f, meta, source_root)
 
     def _extract_batch_metadata(self, filenames, context):
+        """
+        return { file: metadata }
+        metadata can be None if extraction failed.
+        """
         chain = getattr(self.args, 'chain', ['guessit'])
         providers = getattr(self.args, 'providers', {})
         
@@ -137,73 +147,78 @@ class BaseVideoPlugin:
         for f in filenames: results[f] = {}
         if not filenames: return results
 
-        rel_dir = context.get('rel_dir', "")
-
         for processor_name in chain:
             processor_name = processor_name.strip()
             current_results = {} # { abs_path: meta }
             
             if processor_name == 'guessit':
                 logger.debug(f"Batch GuessIt for {len(filenames)} files")
-                current_results = self._extract_batch_guessit(rel_dir, filenames)
+                current_results = self._extract_batch_guessit(context, filenames)
             elif processor_name in providers:
                 config = providers[processor_name]
                 if config.get("type") == "llm":
-                    logger.info(f"Batch LLM ({processor_name}) for {len(filenames)} files")
-                    current_results = self._extract_batch_llm(rel_dir, filenames, config)
-            elif processor_name == "cli_llm" and getattr(self.args, "llm_api_key", None):
-                 config = { "api_key": self.args.llm_api_key, "base_url": self.args.llm_api_base, "model": self.args.llm_model }
-                 logger.info(f"Batch CLI LLM for {len(filenames)} files")
-                 current_results = self._extract_batch_llm(rel_dir, filenames, config)
+                    logger.debug(f"Batch LLM ({processor_name}) for {len(filenames)} files")
+                    current_results = self._extract_batch_llm(context, filenames, config)
 
             if current_results:
                 # Update main results with valid entries
                 succ, ratio = self._validate_batch(current_results)
                 if succ:
                     for k, v in current_results.items():
+                        self._fix_extracted_metadata(v)
                         results[k] = v
                     break
+            logger.info(f"{processor_name}: valid ratio {ratio}")
         return results
 
-    def _extract_batch_guessit(self, rel_dir, filenames):
+    def _extract_batch_guessit(self, context, filenames):
         results = {}
-        for abs_path in filenames:
-            fname = os.path.basename(abs_path)
-            # Fake path construction for GuessIt context
-            fake_path = os.path.join(rel_dir, fname) if rel_dir else fname
-            
+        for f in filenames:
+            if 'rel_dir' in context:
+                fname = os.path.relpath(os.path.relpath(f, context['rel_dir']))
+            else:
+                fname = os.path.basename(f)
             options = self._get_guessit_options()
-            guess = guessit(fake_path, options=options)
-            results[abs_path] = self._map_guessit_to_metadata(guess)
+            guess = guessit(fname, options=options)
+            results[f] = self._map_guessit_to_metadata(guess)
         return results
 
-    def _extract_batch_llm(self, rel_dir, filenames, config):
+    def _extract_batch_llm(self, context, filenames, config):
         # Default LLM implementation: Uses basenames in prompt
-        # filenames: list of absolute paths
+        # Map: Basename -> Abs Path (rel to source_root)
+        name_map = {}
+        base_filenames = []
+        for f in filenames:
+            if 'rel_dir' in context:
+                fname = os.path.relpath(os.path.relpath(f, context['rel_dir']))
+            else:
+                fname = os.path.basename(f)
+            name_map[fname] = f
+            base_filenames.append(fname)
         
-        # Map: Basename -> Abs Path
-        name_map = {os.path.basename(f): f for f in filenames}
-        base_filenames = list(name_map.keys())
-        
-        prompt = self._get_batch_llm_prompt(base_filenames)
+        prompt = self._get_batch_llm_prompt(context, base_filenames)
         if not prompt: 
-            return {} 
+            return {}
 
         response_data = self._call_llm(config, prompt)
         if not isinstance(response_data, dict): return {}
-        
+
         # Map keys back to abs paths
         results = {}
-        for basename, meta in response_data.items():
-            if basename in name_map:
-                results[name_map[basename]] = meta
+        for fname, meta in response_data.items():
+            if fname in name_map:
+                # fix type
+                meta['type'] = self.get_type_name()
+                results[name_map[fname]] = meta
+            else:
+                logger.warning(f"LLM returned unexpected filename key: {fname}")
         
         return results
 
     def _call_llm(self, config, prompt):
         api_key = config.get("api_key")
-        api_base = config.get("base_url", "https://api.openai.com/v1")
-        model = config.get("model", "gpt-3.5-turbo")
+        api_base = config.get("base_url")
+        model = config.get("model")
         
         if not api_key:
             logger.error("Missing api_key for LLM provider.")
@@ -238,23 +253,14 @@ class BaseVideoPlugin:
         ratio = valid_count / total_count if total_count > 0 else 0
         return ratio >= 0.5, ratio
 
-    def _needs_extraction(self, filepath):
-        db_entry = self.db.get_video_entry(getattr(self.args, "src"), filepath)
+    def _needs_extraction(self, filepath, db_entry):
         if not db_entry: return True
         
         retry_failed = getattr(self.args, "retry_failed", False)
         if db_entry.get("error") and retry_failed:
             return True
-            
-        return False
-
-    def _apply_file_logic(self, filepath, new_metadata, source_root):
-        db_entry = self.db.get_video_entry(source_root, filepath)
         
-        if db_entry and not new_metadata:
-            self._process_existing_db_entry(filepath, db_entry, source_root)
-        else:
-            self._process_new_metadata(filepath, new_metadata, source_root)
+        return False
 
     def _process_existing_db_entry(self, filepath, db_entry, source_root):
         soft_link = getattr(self.args, 'soft_link', True)
@@ -305,13 +311,15 @@ class BaseVideoPlugin:
             self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, target_path, current_db_hash, error=None)
 
     def _process_new_metadata(self, filepath, new_metadata, source_root):
+        logger.info(f"Processing new metadata: {filepath}")
         if not new_metadata:
+            logger.warning(f'Extraction returned empty')
             # Extraction yielded nothing
             if not self.db.get_video_entry(source_root, filepath):
                  self.db.update_video_entry(source_root, getattr(self.args, "dst"), filepath, {}, None, "empty", error="Extraction returned empty")
             return
 
-        logger.info(f"Processing new metadata: {filepath}")
+        logger.debug(f"metadata: {new_metadata}")
         
         soft_link = getattr(self.args, 'soft_link', True)
         dst_root = getattr(self.args, "dst") 
@@ -326,9 +334,9 @@ class BaseVideoPlugin:
             self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_hash, error=error_reason)
             return
 
-        logger.debug("Scanning video info...")
         ffmpeg_info = get_video_info_ffmpeg(filepath)
         final_metadata.update(ffmpeg_info)
+        logger.debug(f"ffmpeg_info: {ffmpeg_info}")
 
         target_path = self.generate_target_path(final_metadata, filepath)
         
