@@ -54,10 +54,14 @@ class TVPlugin(BaseVideoPlugin):
         }
     
     def _get_batch_llm_prompt(self, context, filenames):
-        prompt = f"I have a TV series directory: '{context['rel_dir']}'. "
-        prompt += f"It contains these video files (paths relative to series dir): {json.dumps(filenames)}. "
-        prompt += "Return JSON Object: { 'relative_path': { title(string), season(int), episode(int) } }. "
-        prompt += "Use null for missing fields."
+        rel_dir = context.get('rel_dir')
+        prompt = f"I have a TV series directory: '{rel_dir}' (relative path). "
+        prompt += f"It contains these video files: {json.dumps(filenames)}. "
+        prompt += "Please extract metadata for EACH file. "
+        prompt += "Use the directory name to infer the Series Title and Season if possible. "
+        prompt += "Return a JSON Object where keys are the filenames and values are metadata objects. "
+        prompt += "Each metadata object must have: title (series name), season (int, default 1), episode (int)"
+        prompt += "Do not include any markdown formatting, just the raw JSON."
         return prompt
 
     def _fix_extracted_metadata(self, meta):

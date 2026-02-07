@@ -152,12 +152,12 @@ class BaseVideoPlugin:
             current_results = {} # { abs_path: meta }
             
             if processor_name == 'guessit':
-                logger.debug(f"Batch GuessIt for {len(filenames)} files")
+                logger.info(f"Batch GuessIt for {len(filenames)} files")
                 current_results = self._extract_batch_guessit(context, filenames)
             elif processor_name in providers:
                 config = providers[processor_name]
                 if config.get("type") == "llm":
-                    logger.debug(f"Batch LLM ({processor_name}) for {len(filenames)} files")
+                    logger.info(f"Batch LLM ({processor_name}) for {len(filenames)} files")
                     current_results = self._extract_batch_llm(context, filenames, config)
 
             if current_results:
@@ -168,7 +168,7 @@ class BaseVideoPlugin:
                         self._fix_extracted_metadata(v)
                         results[k] = v
                     break
-            logger.info(f"{processor_name}: valid ratio {ratio}")
+            logger.info(f"{processor_name}: valid ratio {ratio*100:.1f}%")
         return results
 
     def _extract_batch_guessit(self, context, filenames):
@@ -201,6 +201,7 @@ class BaseVideoPlugin:
             return {}
 
         response_data = self._call_llm(config, prompt)
+        logger.debug(f"{prompt=}\n\n{response_data=}")
         if not isinstance(response_data, dict): return {}
 
         # Map keys back to abs paths
@@ -271,47 +272,56 @@ class BaseVideoPlugin:
         if db_entry.get("metadata_hash") == current_db_hash:
             # Consistent. Check Error State.
             if db_entry.get("error"):
-                return 
+                return
             else:
                 # Valid entry. Ensure Link.
                 target_path = self.generate_target_path(final_metadata, filepath)
                 if target_path and not os.path.lexists(target_path):
+                    logger.info(f"Link missing, recreating: {target_path}")
                     create_link(filepath, target_path, soft_link)
                 
                 # Migration / Sync Check
-                if db_entry.get("source_root") != source_root:
-                        self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, target_path, current_db_hash, error=None)
+                logger.debug(f"No change detected for: {filepath}")
                 return
         else:
             # Hash Mismatch -> User Edited DB manually. Trust User.
-            logger.info(f"Metadata manually updated: {filepath}")
+            logger.info(f"Metadata changed (corrected by human), re-processing: {filepath}")
             
             is_valid, error_reason = self._validate_metadata(final_metadata)
             if not is_valid:
+                logger.warning(f"Meta after edit is invalid: {error_reason}")
+                old_target = db_entry.get("target_path")
+                if old_target:
+                    logger.info(f"Removing old link due to invalid metadata: {old_target}")
+                    remove_link_and_empty_dirs(old_target)
                 self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_db_hash, error=error_reason)
                 return
 
             target_path = self.generate_target_path(final_metadata, filepath)
             if not target_path:
+                logger.error(f"Cannot generate target path for {filepath}")
                 self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_db_hash, error="Cannot generate path")
                 return
 
             existing = self.db.get_file_by_target_path(target_path)
             if existing and existing != filepath:
+                logger.error(f"Target path conflict: {target_path} used by {existing}")
                 self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_db_hash, error=f"Conflict with {existing}")
                 return
 
             old_target = db_entry.get("target_path")
             if target_path and target_path != old_target:
-                    if old_target: remove_link_and_empty_dirs(old_target)
-                    create_link(filepath, target_path, soft_link)
+                logger.info(f"Target path changed. Relinking to: {target_path}")
+                if old_target: remove_link_and_empty_dirs(old_target)
+                create_link(filepath, target_path, soft_link)
             elif not os.path.lexists(target_path):
-                    create_link(filepath, target_path, soft_link)
+                logger.info(f"Link missing, creating: {target_path}")
+                create_link(filepath, target_path, soft_link)
             
             self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, target_path, current_db_hash, error=None)
 
     def _process_new_metadata(self, filepath, new_metadata, source_root):
-        logger.info(f"Processing new metadata: {filepath}")
+        logger.info(f"Processing new file: {filepath}")
         if not new_metadata:
             logger.warning(f'Extraction returned empty')
             # Extraction yielded nothing
@@ -319,30 +329,33 @@ class BaseVideoPlugin:
                  self.db.update_video_entry(source_root, getattr(self.args, "dst"), filepath, {}, None, "empty", error="Extraction returned empty")
             return
 
-        logger.debug(f"metadata: {new_metadata}")
+        logger.debug(f"filename metadata: {new_metadata}")
         
-        soft_link = getattr(self.args, 'soft_link', True)
-        dst_root = getattr(self.args, "dst") 
-        
-        filename_metadata = new_metadata.copy() 
+        filename_metadata = new_metadata
         current_hash = self.calculate_hash(filename_metadata)
         final_metadata = filename_metadata
 
+        # Check validation
         is_valid, error_reason = self._validate_metadata(filename_metadata)
         if not is_valid:
             logger.warning(f"Invalid metadata: {error_reason}")
             self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_hash, error=error_reason)
             return
 
+        # FFmpeg scan
         ffmpeg_info = get_video_info_ffmpeg(filepath)
         final_metadata.update(ffmpeg_info)
         logger.debug(f"ffmpeg_info: {ffmpeg_info}")
 
+        # Generate Link
         target_path = self.generate_target_path(final_metadata, filepath)
-        
+        soft_link = getattr(self.args, 'soft_link', True)
+        dst_root = getattr(self.args, "dst") 
+
         if target_path:
             existing = self.db.get_file_by_target_path(target_path)
             if existing and existing != filepath:
+                logger.error(f"Target path conflict: {target_path} used by {existing}")
                 self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_hash, error=f"Conflict with {existing}")
                 return
 
