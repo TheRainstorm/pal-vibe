@@ -151,13 +151,12 @@ class BaseVideoPlugin:
             processor_name = processor_name.strip()
             current_results = {} # { abs_path: meta }
             
+            logger.info(f"Batch ({processor_name}) for {len(filenames)} files, context: {context}")
             if processor_name == 'guessit':
-                logger.info(f"Batch GuessIt for {len(filenames)} files")
                 current_results = self._extract_batch_guessit(context, filenames)
             elif processor_name in providers:
                 config = providers[processor_name]
                 if config.get("type") == "llm":
-                    logger.info(f"Batch LLM ({processor_name}) for {len(filenames)} files")
                     current_results = self._extract_batch_llm(context, filenames, config)
 
             if current_results:
@@ -175,7 +174,7 @@ class BaseVideoPlugin:
         results = {}
         for f in filenames:
             if 'rel_dir' in context:
-                fname = os.path.relpath(os.path.relpath(f, context['rel_dir']))
+                fname = os.path.relpath(f, context['rel_dir'])
             else:
                 fname = os.path.basename(f)
             options = self._get_guessit_options()

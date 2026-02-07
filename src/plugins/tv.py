@@ -38,7 +38,7 @@ class TVPlugin(BaseVideoPlugin):
             files.sort()
             for i in range(0, len(files), batch_size):
                 chunk = files[i : i + batch_size]
-                context = {'rel_dir': series_dir}
+                context = {'rel_dir': os.path.join(source_root, series_dir)}
                 final_batches.append({'files': chunk, 'context': context})
         
         return final_batches
