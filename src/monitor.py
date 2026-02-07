@@ -12,25 +12,57 @@ logger = get_logger(__name__)
 
 class BatchQueue:
     def __init__(self, process_callback, delete_callback, debounce_seconds=5):
-        self.pending = {} # {filepath: {'ts': time, 'type': 'PROCESS'/'DELETE', 'config': ...}}
+        # Pending: { task_id_hash: { 'ts': time, 'ctx': ctx, 'files': set(), 'type': 'PROCESS' } }
+        self.pending = {} 
         self.lock = threading.Lock()
         self.debounce_seconds = debounce_seconds
         self.process_callback = process_callback
         self.delete_callback = delete_callback
         self.running = True
 
+    def _get_task_key(self, ctx):
+        # Unique key for a task configuration to group events
+        # ctx is dict with 'config' object and 'db' instance
+        # We can use the source path as key
+        return ctx['config'].src
+
     def add(self, filepath, action_type, task_context):
-        # Filter extensions for PROCESS
         if action_type == 'PROCESS':
             if not filepath.lower().endswith(VIDEO_EXTENSIONS):
                 return
 
+        key = self._get_task_key(task_context)
+        
         with self.lock:
-            self.pending[filepath] = {
-                'ts': time.time(),
-                'type': action_type,
-                'ctx': task_context
-            }
+            if key not in self.pending:
+                self.pending[key] = {
+                    'ts': time.time(),
+                    'type': action_type, # Assuming all events for a task root are same type (PROCESS usually)
+                    'ctx': task_context,
+                    'files': set()
+                }
+            
+            # Update timestamp to extend debounce window
+            self.pending[key]['ts'] = time.time()
+            
+            # If type matches, add file. If mixed types (PROCESS/DELETE), we might need separate queues?
+            # SrcHandler only does PROCESS. DstHandler does DELETE.
+            # DstHandler uses a different task_context? No, same context passed.
+            # But DstHandler logic is different.
+            # Let's split keys by action type too.
+            full_key = f"{key}_{action_type}"
+            
+            if full_key not in self.pending:
+                 self.pending[full_key] = {
+                    'ts': time.time(),
+                    'type': action_type,
+                    'ctx': task_context,
+                    'files': set()
+                }
+            
+            self.pending[full_key]['ts'] = time.time()
+            self.pending[full_key]['files'].add(filepath)
+            
             logger.debug(f"Event queued: {action_type} {filepath}")
 
     def run(self):
@@ -41,23 +73,30 @@ class BatchQueue:
             to_process = []
 
             with self.lock:
-                for filepath, data in list(self.pending.items()):
-                    # DELETE: Immediate (1s delay)
-                    # PROCESS: Debounce delay
+                keys_to_remove = []
+                for key, data in self.pending.items():
                     delay = 1 if data['type'] == 'DELETE' else self.debounce_seconds
                     
                     if now - data['ts'] >= delay:
-                        to_process.append((filepath, data))
-                        del self.pending[filepath]
+                        to_process.append(data)
+                        keys_to_remove.append(key)
+                
+                for k in keys_to_remove:
+                    del self.pending[k]
 
-            for filepath, data in to_process:
+            for data in to_process:
+                filepaths = list(data['files'])
+                if not filepaths: continue
+                
                 try:
                     if data['type'] == 'PROCESS':
-                        self.process_callback(filepath, data['ctx'])
+                        self.process_callback(filepaths, data['ctx'])
                     elif data['type'] == 'DELETE':
-                        self.delete_callback(filepath, data['ctx'])
+                        # Deletes are usually handled one by one or batch, but current logic is one by one
+                        for f in filepaths:
+                            self.delete_callback(f, data['ctx'])
                 except Exception as e:
-                    logger.error(f"Error processing {filepath}: {e}", exc_info=True)
+                    logger.error(f"Error processing batch for {data['ctx']['config'].src}: {e}", exc_info=True)
 
     def stop(self):
         self.running = False
@@ -110,14 +149,17 @@ class MonitorManager:
         if not PluginClass: return None
         return PluginClass(db, task_config)
 
-    def handle_process(self, filepath, ctx):
-        logger.info(f"[Monitor] Processing: {filepath}")
+    def handle_process(self, filepaths, ctx):
+        logger.info(f"[Monitor] Processing batch of {len(filepaths)} files")
         task_config = ctx['config']
         db = ctx['db']
         
         plugin = self.get_plugin(task_config, db)
         if plugin:
-            plugin.process_file(filepath, task_config.src)
+            # Use the new batching logic!
+            batches = plugin.group_files(filepaths)
+            for batch in batches:
+                plugin.process_batch(batch, task_config.src)
 
     def handle_delete(self, target_path, ctx):
         logger.info(f"[Monitor] Link deleted: {target_path}")
@@ -136,11 +178,9 @@ class MonitorManager:
             else:
                 logger.warning(f"[Monitor] Source file already gone: {src_filepath}")
             
-            # Find source root to remove entry
             found_root = None
             if "roots" in db.data:
                 for root in db.data["roots"]:
-                    # Simple prefix check might be enough if paths are normalized
                     if src_filepath.startswith(root):
                         found_root = root
                         break
@@ -154,7 +194,6 @@ class MonitorManager:
     def add_task(self, task_config, db):
         ctx = {'config': task_config, 'db': db}
         
-        # Monitor Source
         monitor_src = getattr(task_config, 'monitor_src', True)
         if monitor_src:
             if os.path.exists(task_config.src):
@@ -165,7 +204,6 @@ class MonitorManager:
         else:
             logger.info(f"Monitoring Source DISABLED for: {task_config.src}")
 
-        # Monitor Destination
         monitor_dst = getattr(task_config, 'monitor_dst', False)
         if monitor_dst:
             if os.path.exists(task_config.dst):

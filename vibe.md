@@ -224,3 +224,25 @@ webui 部分：
 r3. movie batch 处理
 
 1. 我希望 movie 也能支持 batch 处理。这样可以节约 llm 调用成本。你可以对读取到的新文件列表，按照一定的 batch size 调用 llm 进行处理。batch size 作为一个参数并可配置，-1 表示全部文件一起处理，其他正整数表示每次处理多少个文件。
+2. 目前的通用批量处理逻辑需要重构。
+1）目前是根据是否位于一个目录来判断，这样对于 movie 不太合适，因为movie 可能位于自己的子目录下，同一个目录可能只有 1 个文件，没办法 batching
+2）我想到了一个比较通用的 batching 逻辑：
+（1）在 pal 顶层，调用 plugin.process_file 时就应该传递所有文件列表
+（2）process_file 增加一级来处理 batching，每个 plugin 增加一个方法，根据文件列表构建 batching 组，包含一些上下文信息
+（3）调用 extract_filename_metadata 时，应该也把 batching 信息传入进去，extract_filename_metadata 内根据 batching 信息来决定位于哪一个 group，从而可以有 cache 命中逻辑
+3）对于 movie 以及大多数插件，构建 batching 组很简单
+（1）就是将所有文件列表按照 batch size 切分成若干组
+3）对于 TV ，构建 batching 组的逻辑需要细化一下
+（1）如果一个目录不是 src 根目录，比如 src/series_name/sub_dir/file.mkv，它也可以合并到上一级子目录中（src/series_name），作为同一个组
+（2）如果一个 group 下有太多文件，超过一个阈值，有可能是该目录放了不同 series 的文件（比如 src 根目录就可能放了不同 series 的），此时应该只把公共长度超过一个阈值的看作一个series 的 group
+（2）无论何时，组大小不超过指定的 batch size，超过时简单切分即可
+
+3. 修复代码逻辑
+0）我希望 plugin 暴露 process_file 和 process_files 接口就好了。pal 层面不要去关心group_files 和 process_batch 的逻辑。在 plugin 的  plugin 的 process_files 里实现更清晰。process_file 直接作为 process_files 的特殊情况即可。
+1）这样的话，pal 和 monitor.py 是不是基本不用改什么？简化修改。
+
+1）metadata hash 匹配时，并且该文件有 error 时，是否重新 extract 元信息通过一个选项配置，默认不重新 extract
+2）batch size，我希望可以针对不同的 src 单独设置，默认值改为 26。
+3）整理一下代码。1）代码很多部分有一大片注释自问自答，你如果不确定可以向我确定。2）代码不需要考虑和过去兼容，Legacy methods 可以去掉的就去掉
+4）现在 base 的处理流程比较多，在开头位置使用注释画一个流程图，方便其它开发者编写plugin 时知道要重载哪些功能
+

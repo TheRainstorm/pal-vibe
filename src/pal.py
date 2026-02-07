@@ -23,10 +23,6 @@ def get_db_instance(db_path, db_cache):
     return db_cache[db_path]
 
 def prepare_task(task_config, db_cache, global_providers):
-    """
-    Prepares task configuration and DB instance.
-    Returns (TaskConfig object, VideoDatabase instance, Plugin class) or None.
-    """
     if not task_config.get("src") or not task_config.get("dst") or not task_config.get("type"):
         logger.warning(f"Skipping invalid task config: {task_config}")
         return None
@@ -43,11 +39,10 @@ def prepare_task(task_config, db_cache, global_providers):
     if "chain" not in task_config:
         task_config["chain"] = ["guessit"]
 
-    # Set monitor defaults if not present
     if "monitor_src" not in task_config:
         task_config["monitor_src"] = True
     if "monitor_dst" not in task_config:
-        task_config["monitor_dst"] = False # Default off for safety
+        task_config["monitor_dst"] = False 
 
     args = TaskConfig(**task_config)
 
@@ -104,27 +99,12 @@ def run_task_once(task_config, db_cache, global_providers):
     if not found_files:
         logger.warning("No video files found in source directory.")
 
-    for filepath in found_files:
-        plugin.process_file(filepath, source_root)
-
-def load_configuration(config_path):
-    if not os.path.exists(config_path):
-        return None, None, []
-        
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-        
-    defaults = config.get("defaults", {})
-    global_providers = config.get("providers", {})
-    raw_tasks = config.get("tasks", [])
+    # Batch Processing Logic
+    batches = plugin.group_files(found_files)
+    logger.info(f"Processing {len(batches)} batches...")
     
-    tasks_to_run = []
-    for task in raw_tasks:
-        merged_task = defaults.copy()
-        merged_task.update(task)
-        tasks_to_run.append(merged_task)
-        
-    return defaults, global_providers, tasks_to_run
+    for batch in batches:
+        plugin.process_batch(batch, source_root)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Scan and link video files for Jellyfin.")
@@ -133,13 +113,13 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--config", help="Path to YAML configuration file.")
     parser.add_argument("--monitor", action="store_true", help="Run in monitoring mode.")
     
-    # Single task arguments
     parser.add_argument("-s", "--src", help="Source directory.")
     parser.add_argument("-d", "--dst", help="Destination directory.")
     parser.add_argument("-t", "--type", help="Type of video: movie, tv, webdl.")
     parser.add_argument("-S", "--soft-link", action="store_true", help="Create soft links.")
     parser.add_argument("--sub-folder", help="Subfolder name within destination.")
     parser.add_argument("--db", default="pal_database.yaml", help="Database file path.")
+    parser.add_argument("--batch-size", type=int, default=10, help="Batch size for metadata extraction.")
     
     parser.add_argument("--llm-api-key", help="API key for CLI LLM.")
     parser.add_argument("--llm-api-base", default="https://api.openai.com/v1", help="LLM API Base URL.")
@@ -154,18 +134,26 @@ if __name__ == "__main__":
     db_cache = {}
     global_providers = {}
     
-    # 1. Collect all tasks
     tasks_to_run = []
 
     if args.config:
-        _, global_providers, tasks_to_run = load_configuration(args.config)
-        if not tasks_to_run:
-             logger.error(f"Config file not found or empty: {args.config}")
-             exit(1)
+        if not os.path.exists(args.config):
+            logger.error(f"Config file not found: {args.config}")
+            exit(1)
+            
+        with open(args.config, 'r') as f:
+            config = yaml.safe_load(f)
+            
+        defaults = config.get("defaults", {})
+        global_providers = config.get("providers", {})
+        raw_tasks = config.get("tasks", [])
+        
+        for task in raw_tasks:
+            merged_task = defaults.copy()
+            merged_task.update(task)
+            tasks_to_run.append(merged_task)
             
     else:
-        # ... (single task logic) ...
-
         if not args.src or not args.dst or not args.type:
             if not args.monitor:
                  parser.error("src, dst, and type are required unless -c/--config is used.")
@@ -191,15 +179,12 @@ if __name__ == "__main__":
             task_config["chain"] = ["guessit"]
 
         if task_config.get("src"):
-            # For single CLI task, default monitor_src=True, monitor_dst=False is reasonable?
-            # Or we can expose CLI args for them. For simplicity, let's stick to defaults.
             tasks_to_run.append(task_config)
 
     if not tasks_to_run:
         logger.error("No tasks configured.")
         exit(1)
 
-    # 2. Execution Mode
     if args.monitor:
         logger.info("Starting Monitor Mode...")
         manager = MonitorManager(db_cache)

@@ -15,11 +15,6 @@ class MoviePlugin(BaseVideoPlugin):
     def _get_guessit_options(self):
         return {'type': 'movie'}
 
-    def _get_llm_prompt(self, filename):
-        return (f"Extract metadata from movie filename '{filename}'. "
-                "Return JSON with keys: title, year (string), type='Movie'. "
-                "Use null for missing fields.")
-
     def _map_guessit_to_metadata(self, guess):
         return {
             "title": guess.get("title"),
