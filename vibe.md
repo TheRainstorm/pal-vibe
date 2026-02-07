@@ -246,6 +246,7 @@ r3. movie batch 处理
 3）整理简化一下代码。1）代码很多部分有一大片注释自问自答，你如果不确定可以向我确定。2）代码不需要考虑和过去兼容，Legacy methods 可以去掉的就去掉
 4）现在 base 的处理流程比较多，base 中下划线开头的函数是不是需要重新整理一下，到底哪些是需要子类继承覆盖的。并且在开头位置使用注释画一个流程图，方便其它开发者编写plugin 时知道要重载哪些功能。
 
-1）_extract_batch_metadata 返回的 key 需要都是绝对路径，不要搞特殊。去掉 base:137 的判断，修改 plugin 的实现
+1）_extract_batch_metadata 返回的 key 需要都是绝对路径（相对于 src 的相对路径，而不是 file 的 basename），不要搞特殊。去掉 base:137 的判断，修改 plugin 的实现
 2）base 里面不需要了 _get_llm_prompt 吧？除非你把像_extract_batch_guessit 那样，把 _extract_batch_llm 也拆成 base 中的通用部分，每个 plugin 基本只需要修改 prompt 就好了
 3）base:171-179 的逻辑封装成 _validate_batch，就像之前一样。类似的 pal:141-159 这种也封装成一个函数，让代码更清晰。其它部分也检查一下
+切记不要轻易删除原本比较清晰的注释

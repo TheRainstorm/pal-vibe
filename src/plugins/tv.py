@@ -2,7 +2,6 @@ import os
 import json
 import hashlib
 from src.plugins.base import BaseVideoPlugin
-from openai import OpenAI
 from guessit import guessit
 from src.logger import get_logger
 
@@ -96,13 +95,8 @@ class TVPlugin(BaseVideoPlugin):
                  current_results = self._extract_batch_llm(series_dir, target_filenames, config)
 
             if current_results:
-                valid_count = 0
-                for r_path, meta in current_results.items():
-                    if self._validate_metadata(meta)[0]:
-                        valid_count += 1
-                
-                # Check ratio
-                if valid_count > 0 and (valid_count / len(target_filenames) >= 0.5):
+                succ, _ = self._validate_batch(current_results)
+                if succ:
                     raw_results = current_results
                     break
         
@@ -112,21 +106,9 @@ class TVPlugin(BaseVideoPlugin):
             if rel in rel_to_abs:
                 final_results[rel_to_abs[rel]] = meta
         
-        # Base class process_batch logic expects {basename: meta} OR it checks full path.
-        # BaseVideoPlugin._process_batch:
-        # meta = extraction_results.get(os.path.basename(f))
-        # if not meta: meta = extraction_results.get(f)
-        # So returning {abs_path: meta} works perfectly.
-        
         return final_results
 
     def _extract_batch_llm(self, rel_dir, filenames, config):
-        api_key = config.get("api_key")
-        api_base = config.get("base_url")
-        model = config.get("model")
-        
-        client = OpenAI(api_key=api_key, base_url=api_base)
-        
         prompt = f"I have a TV series directory: '{rel_dir}' (relative path). "
         prompt += f"It contains these video files (paths relative to series dir): {json.dumps(filenames)}. "
         prompt += "Extract metadata for EACH file. "
@@ -134,33 +116,20 @@ class TVPlugin(BaseVideoPlugin):
         prompt += "Use directory structure to infer details."
 
         results = {fname:{} for fname in filenames}
-        try:
-            chat_completion = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "text"} 
-            )
-            content = chat_completion.choices[0].message.content
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].strip()
-            
-            data = json.loads(content)
-            if not isinstance(data, dict): return results
-            
-            for k, v in data.items():
-                if k in filenames:
-                    if v:
-                        if isinstance(v.get("season"), str) and v["season"].isdigit(): v["season"] = int(v["season"])
-                        if isinstance(v.get("episode"), str) and v["episode"].isdigit(): v["episode"] = int(v["episode"])
-                        results[k] = v
-                else:
-                    logger.warning(f"LLM returned unexpected filename key: {k}")
-            return results
-        except Exception as e:
-            logger.error(f"LLM Batch Error: {e}")
-            return results
+        data = self._call_llm(config, prompt)
+        
+        if not isinstance(data, dict): return results
+        
+        # Normalize int types
+        for k, v in data.items():
+            if k in filenames:
+                if v:
+                    if isinstance(v.get("season"), str) and v["season"].isdigit(): v["season"] = int(v["season"])
+                    if isinstance(v.get("episode"), str) and v["episode"].isdigit(): v["episode"] = int(v["episode"])
+                    results[k] = v
+            else:
+                logger.warning(f"LLM returned unexpected filename key: {k}")
+        return results
 
     def _extract_batch_guessit(self, base_dir, filenames):
         results = {}

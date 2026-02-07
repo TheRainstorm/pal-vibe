@@ -67,6 +67,25 @@ def prepare_task(task_config, db_cache, global_providers):
 
     return args, db, PluginClass
 
+def cleanup_removed_files(db, source_root, current_files_set):
+    """
+    Checks for files in DB that no longer exist on disk and removes them.
+    """
+    stored_files_in_root = db.get_files_by_source_root(source_root)
+    removed_count = 0
+    
+    for stored_file in stored_files_in_root:
+        if stored_file not in current_files_set and not os.path.exists(stored_file):
+            logger.info(f"File removed: {stored_file}, cleaning up...")
+            entry = db.get_video_entry(source_root, stored_file)
+            if entry and entry.get("target_path"):
+                remove_link_and_empty_dirs(entry["target_path"])
+            db.remove_entry(source_root, stored_file)
+            removed_count += 1
+            
+    if removed_count > 0:
+        logger.info(f"Cleaned up {removed_count} removed files.")
+
 def run_task_once(task_config, db_cache, global_providers):
     result = prepare_task(task_config, db_cache, global_providers)
     if not result: return
@@ -83,22 +102,9 @@ def run_task_once(task_config, db_cache, global_providers):
 
     found_files = scan_video_files(source_root)
     logger.info(f"Found {len(found_files)} files in source directory.")
-    current_files_set = set(found_files)
-
-    stored_files_in_root = db.get_files_by_source_root(source_root)
     
-    removed_count = 0
-    for stored_file in stored_files_in_root:
-        if stored_file not in current_files_set and not os.path.exists(stored_file):
-            logger.info(f"File removed: {stored_file}, cleaning up...")
-            entry = db.get_video_entry(source_root, stored_file)
-            if entry and entry.get("target_path"):
-                remove_link_and_empty_dirs(entry["target_path"])
-            db.remove_entry(source_root, stored_file)
-            removed_count += 1
-    
-    if removed_count > 0:
-        logger.info(f"Cleaned up {removed_count} removed files.")
+    # Cleanup logic encapsulated
+    cleanup_removed_files(db, source_root, set(found_files))
 
     if not found_files:
         logger.warning("No video files found in source directory.")
@@ -113,7 +119,6 @@ if __name__ == "__main__":
     parser.add_argument("--monitor", action="store_true", help="Run in monitoring mode.")
     parser.add_argument("--retry-failed", action="store_true", help="Retry files previously marked as errors even if hash matches.")
     
-    # Single task arguments
     parser.add_argument("-s", "--src", help="Source directory.")
     parser.add_argument("-d", "--dst", help="Destination directory.")
     parser.add_argument("-t", "--type", help="Type of video: movie, tv, webdl.")
