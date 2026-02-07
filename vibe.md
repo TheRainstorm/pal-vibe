@@ -342,3 +342,12 @@ r4. webui 改进
 
 1）现在点击没办法展开文件列表了
 2）另外我需要点击两次同一行时，取消选择
+
+所有的修复都已经应用：
+    1. 目录展开: handleClick 现在会正确地 toggle 目录展开状态。
+   2. 取消选择: 在 handleSelection 的 Single Select 逻辑中增加了判断：如果点击的是当前唯一选中的项，则清除选择 (selectedPaths.clear(); focusedFile.value = null;)。
+   3. Shift 多选: handleSelection 中实现了基于 flattenNodes 和索引的范围选择逻辑，与文件管理器行为一致。
+   4. 目录级全选: 目录复选框的逻辑已实现级联选择。
+
+1）现在点击任何一行都会清除全部的选择。我希望普通的点击一行只会聚焦该行（点击复选框时则还是切换勾选状态），不会勾选该行，也不会取消该行，ctrl 点击才会切换勾选状态。请修复
+

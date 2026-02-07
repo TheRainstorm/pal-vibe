@@ -216,8 +216,8 @@
                 </div>
                 
                 <div class="p-6 border-t bg-gray-50 shrink-0">
-                    <button @click="save" class="bg-blue-600 text-white px-4 py-4 rounded-xl hover:bg-blue-700 w-full font-bold shadow-xl active:scale-[0.97] transition-all flex justify-center items-center gap-3">
-                        <span class="text-lg">Apply & Sync</span>
+                    <button @click="save" class="bg-blue-600 text-white px-4 py-4 rounded-lg hover:bg-blue-700 w-full font-bold shadow-lg transform active:scale-[0.97] transition-all flex justify-center items-center gap-3">
+                        <span class="text-lg">Save & Relink</span>
                         <span v-if="selectedPaths.size > 1" class="bg-blue-900/50 text-[10px] px-2 py-1 rounded-md">{{ selectedPaths.size }} items</span>
                     </button>
                 </div>
@@ -254,7 +254,7 @@
                     </span>
                     
                     <!-- Name -->
-                    <span class="truncate flex-1" :class="{'text-red-600': node.status === 'error', 'font-bold text-gray-800': node.type === 'folder', 'text-gray-600': node.type === 'file'}">
+                    <span class="truncate flex-1" :class="{'text-red-600': node.status === 'error', 'font-bold text-gray-800': node.type === 'folder', 'text-gray-600 font-medium': node.type === 'file'}">
                         {{ node.name }}
                     </span>
                     
@@ -295,6 +295,10 @@
             emits: ['select'],
             setup(props, { emit }) {
                 const handleClick = (node, event) => {
+                    // FIX: Ensure folder toggles
+                    if (node.type === 'folder') {
+                        node.isOpen = !node.isOpen;
+                    }
                     emit('select', { node, event, isCheckbox: false });
                 };
                 
@@ -306,8 +310,9 @@
                 };
                 const isFolderPartial = (node) => {
                     const files = getFolderFiles(node);
-                    const selCount = files.filter(f => props.selectedPaths.has(f.full_path)).length;
-                    return selCount > 0 && selCount < files.length;
+                    if(files.length === 0) return false;
+                    const sel = files.filter(f => props.selectedPaths.has(f.full_path)).length;
+                    return sel > 0 && sel < files.length;
                 };
 
                 return { handleClick, isSelected, isFolderSelected, isFolderPartial };
@@ -328,7 +333,7 @@
 
                 const focusedFile = ref(null);
                 const selectedPaths = ref(new Set());
-                const anchorPath = ref(null); // Last non-shift clicked path
+                const anchorPath = ref(null); 
                 const nodeMap = ref(new Map());
 
                 const editMetadata = ref({});
@@ -352,22 +357,23 @@
                 const handleSelection = ({ node, event, isCheckbox }) => {
                     const path = node.full_path;
 
-                    // 1. Folder Logic
                     if (node.type === 'folder') {
-                        const files = flattenFileNodes(node.children || []);
-                        // Decide whether to select all or deselect all
-                        const allSelected = files.every(f => selectedPaths.value.has(f.full_path));
-                        files.forEach(f => {
-                            if (allSelected) selectedPaths.value.delete(f.full_path);
-                            else selectedPaths.value.add(f.full_path);
-                        });
+                        // Folder Select Logic (Cascading)
+                        if (isCheckbox) {
+                             const files = flattenFileNodes(node.children || []);
+                             const allSelected = files.every(f => selectedPaths.value.has(f.full_path));
+                             files.forEach(f => {
+                                 if (allSelected) selectedPaths.value.delete(f.full_path);
+                                 else selectedPaths.value.add(f.full_path);
+                             });
+                        }
+                        // Clicking folder row just expands, selection logic only on checkbox for folders
                         loadEditor();
                         return;
                     }
 
-                    // 2. File Selection Logic
+                    // File Selection Logic
                     if (event.shiftKey && anchorPath.value) {
-                        // WINDOWS-LIKE SHIFT RANGE SELECT
                         const allFiles = (viewMode.value === 'src' ? flattenFileNodes(srcFileTree.value) : flattenFileNodes(dstFileTree.value));
                         const startIdx = allFiles.findIndex(f => f.full_path === anchorPath.value);
                         const endIdx = allFiles.findIndex(f => f.full_path === path);
@@ -376,7 +382,6 @@
                             const [min, max] = [Math.min(startIdx, endIdx), Math.max(startIdx, endIdx)];
                             const range = allFiles.slice(min, max + 1);
                             
-                            // If Ctrl is not pressed, it replaces the existing selection
                             if (!event.ctrlKey && !event.metaKey) {
                                 selectedPaths.value.clear();
                             }
@@ -384,7 +389,6 @@
                             range.forEach(f => selectedPaths.value.add(f.full_path));
                         }
                     } else if (event.ctrlKey || event.metaKey || isCheckbox) {
-                        // TOGGLE / MULTI SELECT
                         if (selectedPaths.value.has(path)) {
                             selectedPaths.value.delete(path);
                         } else {
@@ -392,20 +396,27 @@
                             anchorPath.value = path;
                         }
                     } else {
-                        // SINGLE SELECT
-                        selectedPaths.value.clear();
-                        selectedPaths.value.add(path);
-                        anchorPath.value = path;
-                        focusedFile.value = node; // Set focus for single click
+                        // SINGLE SELECT LOGIC
+                        // FIX: If clicking same file twice without modifiers, toggle off?
+                        // "I need clicking twice on same row to deselect"
+                        if (selectedPaths.size === 1 && selectedPaths.has(path) && !isCheckbox) {
+                            selectedPaths.clear();
+                            focusedFile.value = null;
+                        } else {
+                            selectedPaths.value.clear();
+                            selectedPaths.value.add(path);
+                            anchorPath.value = path;
+                            focusedFile.value = node;
+                        }
                     }
 
-                    // Sync focus if exactly one item is selected
                     if (selectedPaths.value.size === 1) {
-                         focusedFile.value = nodeMap.value.get(selectedPaths.value.values().next().value);
+                         const p = selectedPaths.value.values().next().value;
+                         focusedFile.value = nodeMap.value.get(p);
                     } else if (selectedPaths.value.size === 0) {
                          focusedFile.value = null;
                     }
-
+                    
                     loadEditor();
                 };
 
@@ -445,26 +456,23 @@
 
                 const applySequence = () => {
                     isSequencePending.value = true;
-                    alert("Sequential episodes Queued. Will apply upon saving.");
+                    alert("Sequence queued! Click Save to apply.");
                 };
 
                 const save = async () => {
                     const paths = Array.from(selectedPaths.value);
                     if (paths.length === 0) return;
 
-                    // Sort lexicographically by filename to ensure logical sequence order
                     const sortedNodes = paths.map(p => nodeMap.value.get(p))
                                             .sort((a,b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
 
                     const updates = sortedNodes.map((node, idx) => {
                         const newMeta = { ...(node.metadata || {}) };
-                        // Apply all non-empty edited fields
                         for (const [k, v] of Object.entries(editMetadata.value)) {
                             if (v !== undefined && v !== null && v !== '' && v !== '__MIXED__') {
                                 newMeta[k] = v;
                             }
                         }
-                        // Overwrite with sequence if pending
                         if (isSequencePending.value) {
                             newMeta.episode = seqStart.value + idx;
                         }
@@ -488,7 +496,7 @@
                             await fetchStats(); await fetchErrors(); await fetchDstTree();
                             clearSelection();
                         }
-                    } catch(e) { alert("Network error"); }
+                    } catch(e) { alert("Network Error"); }
                 };
 
                 const isMixed = (k) => batchPlaceholders.value[k] === 'Mixed values...';
