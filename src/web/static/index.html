@@ -9,6 +9,7 @@
     <style>
         .tree-node { @apply cursor-pointer py-1 px-2 flex items-center hover:bg-gray-100 rounded text-sm select-none transition-colors; }
         .tree-node.focused { @apply bg-blue-50 border-l-2 border-blue-500; }
+        .tree-node.selected { @apply bg-blue-100; }
         .grid-episode { @apply w-10 h-10 flex items-center justify-center border rounded cursor-pointer hover:bg-blue-100 text-sm font-bold; }
         .grid-episode.missing { @apply border-red-300 bg-red-50 text-red-600; }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
@@ -23,15 +24,15 @@
             <h1 class="text-2xl font-bold text-gray-800">PAL Vibe Dashboard</h1>
             
             <div class="flex bg-gray-200 rounded p-1">
-                <button @click="viewMode = 'src'" :class="{'bg-white shadow': viewMode === 'src'}" class="px-4 py-1 rounded transition-all">Source View</button>
-                <button @click="viewMode = 'dst'" :class="{'bg-white shadow': viewMode === 'dst'}" class="px-4 py-1 rounded transition-all">Library View</button>
+                <button @click="viewMode = 'src'" :class="{'bg-white shadow': viewMode === 'src'}" class="px-4 py-1 rounded transition-all font-medium">Source View</button>
+                <button @click="viewMode = 'dst'" :class="{'bg-white shadow': viewMode === 'dst'}" class="px-4 py-1 rounded transition-all font-medium">Library View</button>
             </div>
 
             <div class="flex gap-4 text-sm items-center">
                 <div>Src: <b>{{ stats.src_files_count || 0 }}</b></div>
                 <div>Linked: <b class="text-green-600">{{ stats.dst_files_count || 0 }}</b></div>
                 <div>Errors: <b class="text-red-600">{{ stats.error_files_count || 0 }}</b></div>
-                <button @click="reloadAll" class="bg-gray-700 text-white px-3 py-1 rounded hover:bg-gray-600 ml-2">Reload DB</button>
+                <button @click="reloadAll" class="bg-gray-700 text-white px-3 py-1 rounded hover:bg-gray-600 ml-2 shadow-sm">Reload DB</button>
             </div>
         </header>
 
@@ -42,15 +43,15 @@
             <div v-if="viewMode === 'src'" class="flex w-full h-full">
                 <!-- Task List -->
                 <div class="w-64 bg-white border-r flex flex-col shrink-0">
-                    <div class="p-4 font-bold border-b">Tasks</div>
+                    <div class="p-4 font-bold border-b bg-gray-50 uppercase text-xs text-gray-500 tracking-widest">Tasks</div>
                     <div class="overflow-y-auto flex-1 p-2">
                         <div v-for="task in tasks" :key="task.id" 
                              @click="selectTask(task)"
-                             :class="{'bg-blue-50 border-blue-500': selectedTask?.id === task.id}"
+                             :class="{'bg-blue-50 border-blue-500 shadow-sm': selectedTask?.id === task.id}"
                              class="p-3 mb-2 cursor-pointer hover:bg-gray-50 rounded border-l-4 border-transparent transition-all">
-                            <div class="font-bold text-sm">{{ (task.type || '').toUpperCase() }}</div>
-                            <div class="text-xs text-gray-500 truncate" :title="task.src">{{ task.src }}</div>
-                            <button @click.stop="triggerScan(task.id)" class="mt-2 w-full text-xs bg-gray-200 hover:bg-gray-300 py-1 rounded font-medium">Rescan</button>
+                            <div class="font-bold text-sm text-gray-700">{{ (task.type || '').toUpperCase() }}</div>
+                            <div class="text-xs text-gray-400 truncate mt-1" :title="task.src">{{ task.src }}</div>
+                            <button @click.stop="triggerScan(task.id)" class="mt-2 w-full text-[10px] bg-gray-100 hover:bg-gray-200 py-1 rounded font-bold text-gray-600 border border-gray-200">RE-SCAN</button>
                         </div>
                     </div>
                 </div>
@@ -59,46 +60,45 @@
                 <div class="flex-1 bg-white flex flex-col border-r overflow-hidden min-w-0">
                     <div class="p-4 border-b font-bold flex justify-between items-center bg-gray-50 h-14 shrink-0">
                         <div class="flex items-center gap-2">
-                            <span>Source Files</span>
-                            <span v-if="selectedPaths.size > 0" class="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
-                                {{ selectedPaths.size }} selected
+                            <span>Files</span>
+                            <span v-if="selectedPaths.size > 0" class="text-xs bg-blue-600 text-white px-2 py-0.5 rounded-full font-bold">
+                                {{ selectedPaths.size }}
                             </span>
                         </div>
-                        <button v-if="selectedPaths.size > 0" @click="clearSelection" class="text-xs text-red-500 hover:underline">Clear Selection</button>
+                        <button v-if="selectedPaths.size > 0" @click="clearSelection" class="text-xs text-gray-400 hover:text-red-500 transition-colors">Deselect All</button>
                     </div>
                     
                     <div class="overflow-y-auto flex-1 p-4" @click.self="clearSelection">
-                        <div v-if="!selectedTask" class="text-center text-gray-400 mt-10 italic">Select a task to browse files</div>
+                        <div v-if="!selectedTask" class="text-center text-gray-300 mt-20 italic">Please select a task from the left panel</div>
                         <file-tree v-else 
                             :nodes="srcFileTree" 
                             :selected-paths="selectedPaths" 
                             :focused-id="focusedFile?.id"
-                            @check="handleCheck"
-                            @focus="handleFocus">
+                            @select="handleSelection">
                         </file-tree>
                     </div>
                     
-                    <!-- Error Panel -->
-                    <div class="bg-red-50 border-t p-2 cursor-pointer hover:bg-red-100 flex justify-between items-center shrink-0"
+                    <!-- Error Panel Toggle -->
+                    <div class="bg-red-50 border-t p-2 cursor-pointer hover:bg-red-100 flex justify-between items-center shrink-0 shadow-[0_-2px_10px_rgba(0,0,0,0.05)]"
                          @click="showErrorPanel = !showErrorPanel">
-                        <span class="text-red-700 font-bold text-sm flex items-center gap-2">
-                            <span>⚠️ Errors ({{ errorList.length }})</span>
+                        <span class="text-red-700 font-bold text-sm flex items-center gap-2 pl-2">
+                            <span>⚠️ Unrecognized Files ({{ errorList.length }})</span>
                         </span>
-                        <span>{{ showErrorPanel ? '▼' : '▲' }}</span>
+                        <span class="pr-2">{{ showErrorPanel ? '▼' : '▲' }}</span>
                     </div>
                     
-                    <div v-if="showErrorPanel" class="h-48 bg-white border-t overflow-y-auto p-2 transition-all">
+                    <div v-if="showErrorPanel" class="h-64 bg-white border-t overflow-y-auto p-2 transition-all">
                         <div v-for="file in errorList" :key="file.id" 
-                             @click="handleFocus(file)"
-                             :class="{'focused': focusedFile?.id === file.id}"
+                             @click="handleSelection({node: file, event: $event})"
+                             :class="{'selected': selectedPaths.has(file.full_path), 'focused': focusedFile?.id === file.id}"
                              class="tree-node hover:bg-red-50 text-red-600 group mb-0.5">
                             <input type="checkbox" 
                                    :checked="selectedPaths.has(file.full_path)"
                                    @click.stop
-                                   @change="e => handleCheck(file, e)">
+                                   @change="handleSelection({node: file, event: $event, isCheckbox: true})">
                             <div class="flex-1 flex justify-between items-center min-w-0">
                                 <span class="truncate font-medium">{{ file.name }}</span>
-                                <span class="text-[10px] text-gray-400 ml-2 italic">{{ file.error }}</span>
+                                <span class="text-[10px] text-gray-400 ml-2 italic whitespace-nowrap">{{ file.error }}</span>
                             </div>
                         </div>
                     </div>
@@ -108,13 +108,12 @@
             <!-- DST VIEW -->
             <div v-if="viewMode === 'dst'" class="flex w-full h-full">
                 <div class="w-80 bg-white border-r flex flex-col shrink-0">
-                    <div class="p-4 font-bold border-b h-14 flex items-center">Media Library</div>
+                    <div class="p-4 font-bold border-b h-14 flex items-center bg-gray-50 uppercase text-xs text-gray-500 tracking-widest">Media Library</div>
                     <div class="overflow-y-auto flex-1 p-4">
                         <file-tree :nodes="dstFileTree" 
                             :selected-paths="selectedPaths"
                             :focused-id="focusedFile?.id"
-                            @check="handleCheck"
-                            @focus="handleFocus">
+                            @select="handleSelection">
                         </file-tree>
                     </div>
                 </div>
@@ -122,117 +121,104 @@
                 <div class="flex-1 bg-gray-50 p-8 overflow-y-auto">
                     <!-- TV Grid -->
                     <div v-if="focusedFile && isTVSeries(focusedFile)">
-                        <h2 class="text-2xl font-bold mb-4 text-gray-800">{{ focusedFile.name }}</h2>
-                        <div v-for="(season, sNum) in groupEpisodes(focusedFile)" :key="sNum" class="mb-8">
-                            <h3 class="font-bold text-lg mb-3 text-gray-600 flex items-center gap-2">
-                                <span class="bg-gray-200 px-2 py-0.5 rounded">Season {{ sNum }}</span>
+                        <h2 class="text-3xl font-extrabold mb-6 text-gray-800 border-b pb-4">{{ focusedFile.name }}</h2>
+                        <div v-for="(season, sNum) in groupEpisodes(focusedFile)" :key="sNum" class="mb-10">
+                            <h3 class="font-bold text-sm mb-4 text-gray-500 flex items-center gap-3">
+                                <span class="bg-gray-800 text-white px-3 py-1 rounded shadow-sm">SEASON {{ String(sNum).padStart(2, '0') }}</span>
+                                <div class="h-px bg-gray-200 flex-1"></div>
                             </h3>
                             <div class="flex flex-wrap gap-3">
                                 <div v-for="ep in season" :key="ep.id" 
-                                     @click="handleFocus(ep)"
-                                     class="grid-episode transition-all shadow-sm"
+                                     @click="handleSelection({node: ep, event: $event})"
+                                     class="grid-episode transition-all shadow-sm border-2"
                                      :class="{
-                                         'bg-white border-green-300 text-green-700': !ep.missing, 
-                                         'bg-red-50 border-red-200 text-red-600': ep.missing,
-                                         'ring-4 ring-blue-500 ring-offset-2': focusedFile?.id === ep.id,
+                                         'bg-white border-green-400 text-green-700': !ep.missing, 
+                                         'bg-red-50 border-red-300 text-red-600': ep.missing,
+                                         'ring-4 ring-blue-500 border-blue-500': focusedFile?.id === ep.id,
                                          'bg-blue-100': selectedPaths.has(ep.full_path)
                                      }">
-                                    {{ ep.epNum }}
+                                    {{ String(ep.epNum).padStart(2, '0') }}
                                 </div>
                             </div>
                         </div>
                     </div>
                     
                     <div v-else-if="selectedPaths.size > 0" class="text-center mt-20">
-                         <div class="text-xl text-gray-600 mb-2">Batch Editing {{ selectedPaths.size }} items</div>
-                         <div class="text-sm text-gray-400">Configure shared metadata in the right panel</div>
+                         <div class="text-2xl font-bold text-gray-400">Batch Processing {{ selectedPaths.size }} items</div>
+                         <div class="text-sm text-gray-400 mt-2">Adjust common fields in the sidebar to the right</div>
                     </div>
                     
-                    <div v-else class="text-center text-gray-400 mt-20 italic text-lg">Select a folder or file to explore</div>
+                    <div v-else class="text-center text-gray-300 mt-20 italic text-xl">Select a folder or file to view details</div>
                 </div>
             </div>
 
             <!-- Editor Sidebar -->
-            <div class="w-96 bg-white border-l shadow-2xl flex flex-col shrink-0" 
+            <div class="w-96 bg-white border-l shadow-2xl flex flex-col shrink-0 transition-all" 
                  v-if="selectedPaths.size > 0 || focusedFile">
                 
-                <div class="p-4 border-b font-bold flex justify-between items-center bg-gray-50 h-14 shrink-0">
+                <div class="p-4 border-b font-bold flex justify-between items-center bg-gray-800 text-white h-14 shrink-0">
                     <span class="flex items-center gap-2">
-                        <span v-if="selectedPaths.size > 1" class="text-blue-600">Batch Update</span>
-                        <span v-else class="text-gray-800">Metadata Editor</span>
-                        <span v-if="selectedPaths.size > 0" class="bg-gray-200 text-xs px-2 py-0.5 rounded-full">{{ selectedPaths.size }}</span>
+                        <span v-if="selectedPaths.size > 1">BATCH EDIT</span>
+                        <span v-else>METADATA EDITOR</span>
+                        <span v-if="selectedPaths.size > 0" class="bg-white/20 text-[10px] px-2 py-0.5 rounded-md">{{ selectedPaths.size }}</span>
                     </span>
-                    <button @click="closeEditor" class="text-gray-400 hover:text-gray-600 text-xl p-1">✕</button>
+                    <button @click="closeEditor" class="text-white/50 hover:text-white text-xl px-2">✕</button>
                 </div>
                 
                 <div class="flex-1 overflow-y-auto p-6">
-                    <!-- Target/Source info -->
-                    <div v-if="selectedPaths.size === 1 && focusedFile" class="mb-6 p-3 bg-gray-50 border rounded text-[11px] font-mono break-all text-gray-500">
-                        <div class="mb-1 font-bold text-gray-700">PATH:</div>
-                        {{ focusedFile.full_path }}
-                    </div>
-
-                    <!-- Batch Tools -->
-                    <div v-if="selectedPaths.size > 1" class="mb-8 border-b pb-6">
-                        <div class="flex items-center gap-2 mb-3">
-                            <span class="text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded uppercase">Sequencer</span>
+                    <!-- Range Sequencer (Batch Only) -->
+                    <div v-if="selectedPaths.size > 1" class="mb-8 p-4 bg-indigo-50 border border-indigo-100 rounded-xl shadow-inner">
+                        <h3 class="font-bold text-indigo-800 mb-3 text-xs uppercase tracking-wider flex items-center gap-2">
+                             <span>🛠️ Episode Sequencer</span>
+                        </h3>
+                        <div class="flex gap-2 items-center">
+                            <input v-model.number="seqStart" type="number" class="border-0 bg-white p-2 w-20 rounded-lg text-sm text-center font-bold shadow-sm focus:ring-2 focus:ring-indigo-500 outline-none" min="0">
+                            <button @click="applySequence" class="flex-1 bg-indigo-600 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-indigo-700 shadow-md active:translate-y-px transition-all">
+                                SET SEQUENCE
+                            </button>
                         </div>
-                        <div class="bg-gray-50 border rounded p-4">
-                            <div class="flex gap-3 items-center">
-                                <label class="text-xs font-medium text-gray-600">Starting Episode:</label>
-                                <input v-model.number="seqStart" type="number" class="border p-2 w-20 rounded text-sm text-center font-bold focus:ring-2 focus:ring-indigo-500 outline-none" min="0">
-                                <button @click="applySequence" class="flex-1 bg-indigo-600 text-white px-3 py-2 rounded text-xs font-bold hover:bg-indigo-700 transition-colors">
-                                    Queue Sequence
-                                </button>
-                            </div>
-                            <div class="text-[10px] text-gray-400 mt-2 italic leading-relaxed">
-                                This will assign episode numbers sequentially from {{ seqStart }} to {{ seqStart + selectedPaths.size - 1 }} based on filenames.
-                            </div>
+                        <div class="text-[10px] text-indigo-400 mt-3 italic leading-tight">
+                            Orders files by name and assigns episode numbers starting from {{ seqStart }}.
                         </div>
                     </div>
 
-                    <!-- Fields -->
+                    <!-- Input Fields -->
                     <div v-if="editMetadata">
-                        <!-- Single File Full View -->
-                        <div v-if="selectedPaths.size <= 1">
-                            <div v-for="(val, key) in editMetadata" :key="key" class="mb-5">
-                                <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">{{ key }}</label>
-                                <input v-if="typeof val !== 'boolean'" v-model="editMetadata[key]" class="w-full border border-gray-300 p-2.5 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
-                                <div v-else class="flex items-center mt-2">
-                                    <input type="checkbox" v-model="editMetadata[key]" class="mr-2">
-                                    <span class="text-sm font-medium text-gray-700">{{ val ? 'Enabled' : 'Disabled' }}</span>
-                                </div>
-                            </div>
+                        <!-- Path Info (Single Only) -->
+                        <div v-if="selectedPaths.size === 1 && focusedFile" class="mb-6">
+                             <label class="block text-[10px] font-bold text-gray-400 uppercase mb-1">Source Path</label>
+                             <div class="text-[10px] font-mono p-2 bg-gray-50 border rounded break-all text-gray-500 leading-relaxed max-h-24 overflow-y-auto">
+                                {{ focusedFile.full_path }}
+                             </div>
                         </div>
 
-                        <!-- Batch View -->
-                        <div v-else>
-                            <div v-for="key in ['title', 'season', 'year']" :key="key" class="mb-5">
-                                <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5 flex justify-between">
-                                    {{ key }}
-                                    <span v-if="isMixed(key)" class="text-orange-500 font-normal italic text-[10px]">Mixed Values</span>
-                                </label>
-                                <input v-model="editMetadata[key]" 
-                                       :placeholder="isMixed(key) ? '<Multiple Values>' : ''"
-                                       class="w-full border border-gray-300 p-2.5 rounded text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                                       :class="{'bg-orange-50 border-orange-200': isMixed(key)}">
+                        <div v-for="key in ['title', 'season', 'year']" :key="key" class="mb-6">
+                            <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 flex justify-between">
+                                {{ key }}
+                                <span v-if="selectedPaths.size > 1 && isMixed(key)" class="text-orange-500 font-bold lowercase text-[9px] bg-orange-50 px-1.5 rounded">Mixed</span>
+                            </label>
+                            <input v-model="editMetadata[key]" 
+                                   :placeholder="isMixed(key) ? 'Multiple values selected...' : ''"
+                                   class="w-full border border-gray-200 p-3 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                                   :class="{'bg-orange-50/50 border-orange-100': isMixed(key)}">
+                        </div>
+                        
+                        <div class="mb-6">
+                            <label class="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Episode</label>
+                            <div v-if="selectedPaths.size > 1" class="p-4 bg-gray-50 rounded-lg border border-dashed border-gray-200 text-center">
+                                <span v-if="isSequencePending" class="text-indigo-600 font-bold text-xs uppercase animate-pulse">Auto-sequence ({{ seqStart }}+) Queued</span>
+                                <span v-else class="text-gray-400 text-xs italic">Use tool at top to set sequence</span>
                             </div>
-                            
-                            <div class="mb-5">
-                                <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Episode</label>
-                                <div class="p-3 bg-gray-100 rounded text-xs text-gray-500 italic border border-dashed border-gray-300">
-                                    <span v-if="isSequencePending">Auto-sequence queued ({{ seqStart }}+)</span>
-                                    <span v-else>Use sequencer or edit individually.</span>
-                                </div>
-                            </div>
+                            <input v-else v-model.number="editMetadata.episode" 
+                                   class="w-full border border-gray-200 p-3 rounded-lg text-sm shadow-sm focus:ring-2 focus:ring-blue-500 outline-none">
                         </div>
                     </div>
                 </div>
                 
                 <div class="p-6 border-t bg-gray-50 shrink-0">
-                    <button @click="save" class="bg-blue-600 text-white px-4 py-4 rounded-lg hover:bg-blue-700 w-full font-bold shadow-lg transform active:scale-[0.98] transition-all flex justify-center items-center gap-3">
-                        <span class="text-lg">Save & Relink</span>
-                        <span v-if="selectedPaths.size > 1" class="bg-blue-800 text-xs px-2.5 py-1 rounded-md">{{ selectedPaths.size }} items</span>
+                    <button @click="save" class="bg-blue-600 text-white px-4 py-4 rounded-xl hover:bg-blue-700 w-full font-bold shadow-xl active:scale-[0.97] transition-all flex justify-center items-center gap-3">
+                        <span class="text-lg">Apply & Sync</span>
+                        <span v-if="selectedPaths.size > 1" class="bg-blue-900/50 text-[10px] px-2 py-1 rounded-md">{{ selectedPaths.size }} items</span>
                     </button>
                 </div>
             </div>
@@ -240,50 +226,51 @@
         </main>
     </div>
 
-    <!-- Tree Component Template -->
+    <!-- Recursive Tree Template -->
     <template id="file-tree-template">
         <ul class="pl-2">
             <li v-for="node in nodes" :key="node.id">
                 <div class="tree-node group mb-0.5" 
-                     :class="{'focused': focusedId === node.id}"
+                     :class="{'focused shadow-sm': focusedId === node.id, 'selected bg-blue-50/50': isSelected(node.full_path)}"
                      @click.stop="handleClick(node, $event)">
                     
                     <!-- Checkbox -->
                     <input type="checkbox" 
-                           :checked="selectedPaths.has(node.full_path) || (node.type==='folder' && isFolderSelected(node))"
+                           :checked="isSelected(node.full_path) || (node.type==='folder' && isFolderSelected(node))"
                            :indeterminate.prop="node.type==='folder' && isFolderPartial(node)"
-                           @change="e => $emit('check', node, e)"
+                           @change="e => $emit('select', {node, event: e, isCheckbox: true})"
                            @click.stop>
 
-                    <!-- Icon -->
+                    <!-- Arrow -->
                     <span v-if="node.type === 'folder'" 
-                          class="mr-1.5 text-yellow-500 transform transition-transform duration-200" 
-                          :class="{'rotate-90': node.isOpen}">▶</span>
-                    <span v-else class="mr-1.5 text-xs w-4 text-center">
+                          class="mr-1 text-[10px] text-gray-400 transition-transform duration-300" 
+                          :class="{'rotate-90 text-gray-600': node.isOpen}">▶</span>
+                    
+                    <!-- Status Icon -->
+                    <span v-else class="mr-2 text-[10px] w-4 text-center shrink-0">
                         <span v-if="node.status === 'error'">🔴</span>
                         <span v-else-if="node.status === 'linked'">🟢</span>
                         <span v-else>⚪</span>
                     </span>
                     
                     <!-- Name -->
-                    <span class="truncate flex-1" :class="{'text-red-600': node.status === 'error', 'font-bold text-gray-800': node.type === 'folder', 'text-gray-600 font-medium': node.type === 'file'}">
+                    <span class="truncate flex-1" :class="{'text-red-600': node.status === 'error', 'font-bold text-gray-800': node.type === 'folder', 'text-gray-600': node.type === 'file'}">
                         {{ node.name }}
                     </span>
                     
-                    <!-- Metadata Summary -->
-                    <div v-if="node.type === 'file' && node.metadata && node.metadata.title" class="ml-4 flex items-center gap-1.5 text-[10px] opacity-60 group-hover:opacity-100 transition-opacity">
-                        <span class="text-blue-600 font-bold px-1.5 bg-blue-50 rounded-md border border-blue-100">{{ node.metadata.title }}</span>
-                        <span v-if="node.metadata.season !== undefined" class="text-emerald-700 font-mono bg-emerald-50 px-1 rounded">S{{ String(node.metadata.season).padStart(2, '0') }}</span>
-                        <span v-if="node.metadata.episode !== undefined" class="text-orange-700 font-mono bg-orange-50 px-1 rounded">E{{ String(node.metadata.episode).padStart(2, '0') }}</span>
+                    <!-- Meta Summary -->
+                    <div v-if="node.type === 'file' && node.metadata && node.metadata.title" class="ml-4 flex items-center gap-1.5 text-[9px] font-bold opacity-40 group-hover:opacity-100 transition-opacity">
+                        <span class="text-blue-500 bg-blue-50 px-1 rounded">{{ node.metadata.title }}</span>
+                        <span v-if="node.metadata.season !== undefined" class="text-emerald-600">S{{ String(node.metadata.season).padStart(2, '0') }}</span>
+                        <span v-if="node.metadata.episode !== undefined" class="text-orange-600 border-l pl-1.5 border-gray-200">E{{ String(node.metadata.episode).padStart(2, '0') }}</span>
                     </div>
                 </div>
                 
-                <div v-if="node.type === 'folder' && node.isOpen" class="border-l border-gray-200 ml-[11px] pl-1.5">
+                <div v-if="node.type === 'folder' && node.isOpen" class="border-l border-gray-200 ml-[10px] pl-2 mt-0.5">
                     <file-tree :nodes="node.children" 
                         :selected-paths="selectedPaths" 
                         :focused-id="focusedId"
-                        @check="(n, e) => $emit('check', n, e)"
-                        @focus="n => $emit('focus', n)">
+                        @select="e => $emit('select', e)">
                     </file-tree>
                 </div>
             </li>
@@ -291,7 +278,7 @@
     </template>
 
     <script>
-        const { createApp, ref, onMounted, computed, watch } = Vue;
+        const { createApp, ref, onMounted, computed, watch, nextTick } = Vue;
 
         const flattenFileNodes = (nodes, acc = []) => {
             for (const node of nodes) {
@@ -305,28 +292,25 @@
             name: 'FileTree',
             template: '#file-tree-template',
             props: ['nodes', 'selectedPaths', 'focusedId'],
-            emits: ['check', 'focus'],
+            emits: ['select'],
             setup(props, { emit }) {
                 const handleClick = (node, event) => {
-                    if (node.type === 'folder') {
-                        node.isOpen = !node.isOpen;
-                    }
-                    emit('focus', node);
+                    emit('select', { node, event, isCheckbox: false });
                 };
                 
                 const getFolderFiles = (node) => flattenFileNodes(node.children || []);
+                const isSelected = (path) => props.selectedPaths.has(path);
                 const isFolderSelected = (node) => {
                     const files = getFolderFiles(node);
                     return files.length > 0 && files.every(f => props.selectedPaths.has(f.full_path));
                 };
                 const isFolderPartial = (node) => {
                     const files = getFolderFiles(node);
-                    if(files.length === 0) return false;
-                    const sel = files.filter(f => props.selectedPaths.has(f.full_path)).length;
-                    return sel > 0 && sel < files.length;
+                    const selCount = files.filter(f => props.selectedPaths.has(f.full_path)).length;
+                    return selCount > 0 && selCount < files.length;
                 };
 
-                return { handleClick, isFolderSelected, isFolderPartial };
+                return { handleClick, isSelected, isFolderSelected, isFolderPartial };
             }
         };
 
@@ -344,7 +328,7 @@
 
                 const focusedFile = ref(null);
                 const selectedPaths = ref(new Set());
-                const lastCheckedPath = ref(null);
+                const anchorPath = ref(null); // Last non-shift clicked path
                 const nodeMap = ref(new Map());
 
                 const editMetadata = ref({});
@@ -362,62 +346,77 @@
                     };
                     scan(srcFileTree.value);
                     scan(dstFileTree.value);
-                    // Add error list items to map
                     errorList.value.forEach(f => nodeMap.value.set(f.full_path, f));
                 };
 
-                const handleFocus = (node) => {
-                    focusedFile.value = node;
-                    if (selectedPaths.value.size === 0) {
-                        selectedPaths.value.add(node.full_path);
-                    }
-                    loadEditor();
-                };
+                const handleSelection = ({ node, event, isCheckbox }) => {
+                    const path = node.full_path;
 
-                const handleCheck = (node, event) => {
-                    const checked = event.target.checked;
-                    
+                    // 1. Folder Logic
                     if (node.type === 'folder') {
                         const files = flattenFileNodes(node.children || []);
+                        // Decide whether to select all or deselect all
+                        const allSelected = files.every(f => selectedPaths.value.has(f.full_path));
                         files.forEach(f => {
-                            if (checked) selectedPaths.value.add(f.full_path);
-                            else selectedPaths.value.delete(f.full_path);
+                            if (allSelected) selectedPaths.value.delete(f.full_path);
+                            else selectedPaths.value.add(f.full_path);
                         });
-                    } else {
-                        const path = node.full_path;
+                        loadEditor();
+                        return;
+                    }
 
-                        // SHIFT SELECT LOGIC
-                        if (event.shiftKey && lastCheckedPath.value) {
-                             const allFiles = (viewMode.value === 'src' ? flattenFileNodes(srcFileTree.value) : flattenFileNodes(dstFileTree.value));
-                             const startIdx = allFiles.findIndex(f => f.full_path === lastCheckedPath.value);
-                             const endIdx = allFiles.findIndex(f => f.full_path === path);
-                             if (startIdx !== -1 && endIdx !== -1) {
-                                 const [min, max] = [Math.min(startIdx, endIdx), Math.max(startIdx, endIdx)];
-                                 allFiles.slice(min, max + 1).forEach(f => {
-                                     if(checked) selectedPaths.value.add(f.full_path);
-                                     else selectedPaths.value.delete(f.full_path);
-                                 });
-                             }
-                        } else {
-                            if (checked) selectedPaths.value.add(path);
-                            else selectedPaths.value.delete(path);
+                    // 2. File Selection Logic
+                    if (event.shiftKey && anchorPath.value) {
+                        // WINDOWS-LIKE SHIFT RANGE SELECT
+                        const allFiles = (viewMode.value === 'src' ? flattenFileNodes(srcFileTree.value) : flattenFileNodes(dstFileTree.value));
+                        const startIdx = allFiles.findIndex(f => f.full_path === anchorPath.value);
+                        const endIdx = allFiles.findIndex(f => f.full_path === path);
+                        
+                        if (startIdx !== -1 && endIdx !== -1) {
+                            const [min, max] = [Math.min(startIdx, endIdx), Math.max(startIdx, endIdx)];
+                            const range = allFiles.slice(min, max + 1);
+                            
+                            // If Ctrl is not pressed, it replaces the existing selection
+                            if (!event.ctrlKey && !event.metaKey) {
+                                selectedPaths.value.clear();
+                            }
+                            
+                            range.forEach(f => selectedPaths.value.add(f.full_path));
                         }
-                        lastCheckedPath.value = path;
+                    } else if (event.ctrlKey || event.metaKey || isCheckbox) {
+                        // TOGGLE / MULTI SELECT
+                        if (selectedPaths.value.has(path)) {
+                            selectedPaths.value.delete(path);
+                        } else {
+                            selectedPaths.value.add(path);
+                            anchorPath.value = path;
+                        }
+                    } else {
+                        // SINGLE SELECT
+                        selectedPaths.value.clear();
+                        selectedPaths.value.add(path);
+                        anchorPath.value = path;
+                        focusedFile.value = node; // Set focus for single click
                     }
-                    
+
+                    // Sync focus if exactly one item is selected
                     if (selectedPaths.value.size === 1) {
-                         const p = selectedPaths.value.values().next().value;
-                         focusedFile.value = nodeMap.value.get(p);
+                         focusedFile.value = nodeMap.value.get(selectedPaths.value.values().next().value);
+                    } else if (selectedPaths.value.size === 0) {
+                         focusedFile.value = null;
                     }
+
                     loadEditor();
                 };
 
                 const clearSelection = () => {
                     selectedPaths.value.clear();
+                    anchorPath.value = null;
                     focusedFile.value = null;
-                    lastCheckedPath.value = null;
                     loadEditor();
                 };
+
+                const closeEditor = () => { clearSelection(); };
 
                 const loadEditor = () => {
                     editMetadata.value = {};
@@ -434,43 +433,42 @@
                         }
                     } else {
                         const nodes = paths.map(p => nodeMap.value.get(p)).filter(n => n);
-                        if(nodes.length === 0) return;
-                        const keys = ['title', 'season', 'year'];
+                        const keys = ['title', 'season', 'year', 'episode'];
                         keys.forEach(k => {
                             const first = nodes[0].metadata ? nodes[0].metadata[k] : undefined;
                             const allMatch = nodes.every(n => (n.metadata ? n.metadata[k] : undefined) === first);
                             if (allMatch) editMetadata.value[k] = first;
-                            else batchPlaceholders.value[k] = '<Mixed Values>';
+                            else batchPlaceholders.value[k] = 'Mixed values...';
                         });
                     }
                 };
 
                 const applySequence = () => {
                     isSequencePending.value = true;
-                    alert("Sequence queued! Click Save to apply.");
+                    alert("Sequential episodes Queued. Will apply upon saving.");
                 };
 
                 const save = async () => {
                     const paths = Array.from(selectedPaths.value);
                     if (paths.length === 0) return;
 
-                    // Standard sort based on name for logical sequence
+                    // Sort lexicographically by filename to ensure logical sequence order
                     const sortedNodes = paths.map(p => nodeMap.value.get(p))
                                             .sort((a,b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
 
                     const updates = sortedNodes.map((node, idx) => {
                         const newMeta = { ...(node.metadata || {}) };
+                        // Apply all non-empty edited fields
                         for (const [k, v] of Object.entries(editMetadata.value)) {
-                            if (v !== undefined && v !== null && v !== '') {
+                            if (v !== undefined && v !== null && v !== '' && v !== '__MIXED__') {
                                 newMeta[k] = v;
                             }
                         }
+                        // Overwrite with sequence if pending
                         if (isSequencePending.value) {
                             newMeta.episode = seqStart.value + idx;
-                        } else if (selectedPaths.value.size > 1 && editMetadata.value.episode) {
-                             newMeta.episode = editMetadata.value.episode;
                         }
-                        
+
                         return {
                             full_path: node.full_path,
                             source_root: selectedTask.value ? selectedTask.value.src : "",
@@ -485,16 +483,15 @@
                             body: JSON.stringify({ updates })
                         });
                         if (res.ok) {
-                            alert("Success!");
+                            alert("Successfully updated and re-processed.");
                             if (selectedTask.value) await selectTask(selectedTask.value);
                             await fetchStats(); await fetchErrors(); await fetchDstTree();
                             clearSelection();
                         }
-                    } catch(e) { alert("Network Error"); }
+                    } catch(e) { alert("Network error"); }
                 };
 
-                const closeEditor = () => clearSelection();
-                const isMixed = (k) => batchPlaceholders.value[k] === '<Mixed Values>';
+                const isMixed = (k) => batchPlaceholders.value[k] === 'Mixed values...';
 
                 const fetchStats = async () => { stats.value = await (await fetch('/api/stats')).json(); };
                 const fetchTasks = async () => { tasks.value = await (await fetch('/api/tasks')).json(); };
@@ -513,13 +510,13 @@
                     rebuildNodeMap();
                 };
                 const triggerScan = async (tid) => {
-                    if(!confirm("Scan?")) return;
+                    if(!confirm("Rescan directory?")) return;
                     await fetch(`/api/scan/${tid}`, { method: 'POST' });
                     fetchStats(); fetchErrors(); fetchDstTree();
                     if(selectedTask.value?.id === tid) selectTask(selectedTask.value);
                 };
                 const reloadAll = async () => {
-                    if(!confirm("Reload?")) return;
+                    if(!confirm("Reload configuration and databases?")) return;
                     await fetch('/api/reload', { method: 'POST' });
                     window.location.reload();
                 };
@@ -546,7 +543,7 @@
                 return {
                     viewMode, stats, tasks, selectedTask, srcFileTree, dstFileTree, errorList, showErrorPanel,
                     focusedFile, selectedPaths, editMetadata, batchPlaceholders, seqStart, isSequencePending,
-                    selectTask, triggerScan, reloadAll, handleCheck, handleFocus, closeEditor, save,
+                    selectTask, triggerScan, reloadAll, handleSelection, closeEditor, save,
                     applySequence, isMixed, isTVSeries, groupEpisodes, clearSelection
                 };
             }
