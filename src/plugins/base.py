@@ -3,7 +3,7 @@ import json
 import hashlib
 from guessit import guessit
 from openai import OpenAI
-from src.metadata import get_video_info_ffmpeg
+from src.metadata import get_video_info_ffmpeg, VIDEO_EXTENSIONS
 from src.link_manager import create_link, remove_link_and_empty_dirs
 from src.logger import get_logger
 
@@ -13,77 +13,140 @@ class BaseVideoPlugin:
     def __init__(self, db, args):
         self.db = db
         self.args = args
+        self.batch_cache = {} # { dir_path: { filename: metadata } }
 
     def get_type_name(self):
         raise NotImplementedError
 
     def extract_filename_metadata(self, filepath, source_root=None):
+        """
+        Uses lazy batch processing to extract metadata.
+        """
+        return self._extract_metadata_lazy_batch(filepath, source_root)
+
+    def _extract_metadata_lazy_batch(self, filepath, source_root):
+        dirname = os.path.dirname(filepath)
         filename = os.path.basename(filepath)
+        
+        # Check cache
+        if dirname in self.batch_cache:
+            if filename in self.batch_cache[dirname]:
+                logger.debug(f"Cached metadata hit for {filename}")
+                return self.batch_cache[dirname][filename]
+            else:
+                # File not in the cached batch (maybe added later or batching logic skipped it)
+                # We can try to process it individually or trigger a re-batch?
+                # For simplicity, let's treat it as a miss and re-trigger batch logic for its group
+                pass 
+        
+        # Cache miss: Trigger batch processing
+        # 1. Identify all candidates in directory
+        siblings = []
+        try:
+            for f in os.listdir(dirname):
+                if f.lower().endswith(VIDEO_EXTENSIONS):
+                    siblings.append(f)
+        except OSError:
+            siblings = [filename]
+        siblings.sort()
+
+        # 2. Determine batch size
+        # Default 10 if not set. -1 means all.
+        batch_size = getattr(self.args, 'batch_size', 10)
+        if batch_size is None: batch_size = 10
+        if batch_size <= 0:
+            batch_size = len(siblings)
+
+        # 3. Find which batch current file belongs to
+        target_batch = []
+        for i in range(0, len(siblings), batch_size):
+            batch = siblings[i : i + batch_size]
+            if filename in batch:
+                target_batch = batch
+                break
+        
+        if not target_batch:
+            target_batch = [filename] # Should not happen
+
+        # 4. Context info
+        rel_dir = ""
+        if source_root:
+            try:
+                rel_dir = os.path.relpath(dirname, source_root)
+                if rel_dir == ".": rel_dir = ""
+            except ValueError:
+                pass
+
+        # 5. Execute processing chain
         chain = getattr(self.args, 'chain', ['guessit'])
         providers = getattr(self.args, 'providers', {})
-
+        
+        results = {} # { filename: metadata }
+        
         for processor_name in chain:
             processor_name = processor_name.strip()
-            metadata = None
             
             if processor_name == 'guessit':
-                logger.debug(f"Extracting metadata using GuessIt for: {filename}")
-                metadata = self._extract_guessit(filename)
-            elif processor_name in providers:
-                logger.debug(f"Extracting metadata using Provider '{processor_name}' for: {filename}")
-                provider_config = providers[processor_name]
-                if provider_config.get("type") == "llm":
-                    metadata = self._extract_llm(filename, provider_config)
-                    logger.info(f"{processor_name}: {metadata}")
-            else:
-                logger.warning(f"Unknown processor '{processor_name}' in chain.")
-
-            is_valid, _ = self._validate_metadata(metadata)
-            if is_valid:
-                logger.debug(f"Successfully extracted metadata with {processor_name}: {metadata}")
-                return metadata
-        
-        logger.warning(f"All processors failed to extract valid metadata for: {filename}")
-        return metadata if metadata else {}
-
-    def _extract_guessit(self, filename):
-        options = self._get_guessit_options()
-        guess = guessit(filename, options=options)
-        return self._map_guessit_to_metadata(guess)
-
-    def _extract_llm(self, filename, config):
-        api_key = config.get("api_key")
-        api_base = config.get("base_url", "https://api.openai.com/v1")
-        model = config.get("model", "gpt-3.5-turbo")
-        
-        if not api_key:
-            logger.error("Missing api_key for LLM provider.")
-            return None
-
-        client = OpenAI(api_key=api_key, base_url=api_base)
-        prompt = self._get_llm_prompt(filename)
-        try:
-            chat_completion = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "text"}
-            )
-            content = chat_completion.choices[0].message.content
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].strip()
+                logger.info(f"Batch GuessIt for {len(target_batch)} files in '{rel_dir}'")
+                results = self._extract_batch_guessit(rel_dir, target_batch)
             
-            return json.loads(content)
-        except Exception as e:
-            logger.error(f"LLM Error: {e}")
-            return None
+            elif processor_name in providers:
+                config = providers[processor_name]
+                if config.get("type") == "llm":
+                    logger.info(f"Batch LLM ({processor_name}) for {len(target_batch)} files in '{rel_dir}'")
+                    results = self._extract_batch_llm(rel_dir, target_batch, config)
+            
+            elif processor_name == "cli_llm" and getattr(self.args, "llm_api_key", None):
+                 config = {
+                     "api_key": self.args.llm_api_key,
+                     "base_url": self.args.llm_api_base,
+                     "model": self.args.llm_model
+                 }
+                 logger.info(f"Batch CLI LLM for {len(target_batch)} files in '{rel_dir}'")
+                 results = self._extract_batch_llm(rel_dir, target_batch, config)
 
+            # Validate batch
+            succ, ratio = self._validate_batch(results)
+            logger.debug(f"{processor_name} valid ratio: {ratio:.0%}")
+            if succ:
+                break
+        
+        # 6. Update cache
+        if dirname not in self.batch_cache:
+            self.batch_cache[dirname] = {}
+        self.batch_cache[dirname].update(results)
+        
+        return results.get(filename, {})
+
+    def _validate_batch(self, results):
+        if not results: return False, 0
+        valid_count = 0
+        total_count = len(results)
+        for meta in results.values():
+            is_valid, _ = self._validate_metadata(meta)
+            if is_valid:
+                valid_count += 1
+        ratio = valid_count / total_count if total_count > 0 else 0
+        return ratio >= 0.5, ratio
+
+    # Abstract methods for subclasses to implement specifics
+    def _extract_batch_llm(self, rel_dir, filenames, config):
+        # Default implementation: Iterate one by one (fallback) or use generic prompt?
+        # Better to force subclasses to implement optimized prompts.
+        raise NotImplementedError("Subclasses must implement _extract_batch_llm")
+
+    def _extract_batch_guessit(self, rel_dir, filenames):
+        results = {}
+        for fname in filenames:
+            fake_path = os.path.join(rel_dir, fname) if rel_dir else fname
+            options = self._get_guessit_options()
+            guess = guessit(fake_path, options=options)
+            results[fname] = self._map_guessit_to_metadata(guess)
+        return results
+
+    # Legacy single file methods kept for reference or specific overrides
     def _get_guessit_options(self):
         return {}
-
-    def _get_llm_prompt(self, filename):
-        return f"Extract metadata from '{filename}' as JSON."
 
     def _map_guessit_to_metadata(self, guess):
         return dict(guess)
@@ -109,7 +172,6 @@ class BaseVideoPlugin:
         if db_entry:
             final_metadata = db_entry["metadata"]
             current_db_hash = self.calculate_hash(final_metadata)
-            # logger.debug(f"{current_db_hash=} {db_entry=} ")
             
             if db_entry.get("metadata_hash") == current_db_hash:
                 if db_entry.get("error"):
@@ -123,6 +185,10 @@ class BaseVideoPlugin:
                     if not os.path.lexists(target_path):
                         logger.info(f"Link missing, recreating: {target_path}")
                         create_link(filepath, target_path, soft_link)
+                    
+                    if db_entry.get("source_root") != source_root:
+                         logger.debug(f"Updating source_root for {filepath}")
+                         self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, target_path, current_db_hash, error=None)
                     
                     logger.debug(f"No change detected for: {filepath}")
                     return 

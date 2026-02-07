@@ -4,7 +4,6 @@ import hashlib
 from src.plugins.base import BaseVideoPlugin
 from openai import OpenAI
 from guessit import guessit
-from src.metadata import VIDEO_EXTENSIONS
 from src.logger import get_logger
 
 logger = get_logger(__name__)
@@ -13,96 +12,50 @@ class TVPlugin(BaseVideoPlugin):
     def get_type_name(self):
         return "TV"
 
-    def __init__(self, db, args):
-        super().__init__(db, args)
-        self.batch_cache = {} # { dir_path: { filename: metadata } }
+    def _get_guessit_options(self):
+        return {'type': 'episode'}
 
-    def extract_filename_metadata(self, filepath, source_root=None):
-        dirname = os.path.dirname(filepath)
-        filename = os.path.basename(filepath)
+    def _get_llm_prompt(self, filename):
+        return (f"Extract metadata from TV episode filename '{filename}'. "
+                "Return JSON with keys: title, season (int), episode (int), type='TV'. "
+                "Default season to 1 if missing. Use null for missing fields.")
+
+    def _map_guessit_to_metadata(self, guess):
+        return {
+            "title": guess.get("title"),
+            "season": guess.get("season", 1),
+            "episode": guess.get("episode"),
+            "type": "TV"
+        }
+    
+    def calculate_hash(self, metadata):
+        hash_data = {k: v for k, v in metadata.items() if k in ['title', 'season', 'episode', 'type']}
+        return hashlib.sha256(json.dumps(hash_data, sort_keys=True).encode('utf-8')).hexdigest()
+
+    def generate_target_path(self, metadata, filepath):
+        title = metadata.get("title")
+        if not title: return None
         
-        # Check cache
-        if dirname in self.batch_cache:
-            if filename in self.batch_cache[dirname]:
-                logger.debug(f"Cached metadata hit")
-                return self.batch_cache[dirname][filename]
-            else:
-                logger.warning(f"Cached metadata miss for file in cached dir")
-                return {}
+        season = metadata.get("season", 1)
+        episode = metadata.get("episode")
+        ext = os.path.splitext(filepath)[1]
+
+        series_dir = f"{title}"
+        season_dir = f"Season {season:02d}"
         
-        # Cache miss: Trigger batch processing for this directory
-        # Find all sibling video files
-        siblings = []
-        try:
-            # We only care about siblings that are video files to save tokens
-            for f in os.listdir(dirname):
-                if f.lower().endswith(VIDEO_EXTENSIONS):
-                    siblings.append(f)
-        except OSError:
-            siblings = [filename]
-        siblings.sort()
+        filename_str = f"{title}-S{season:02d}E{episode:02d}{ext}"
 
-        # Calculate relative directory path for context (e.g. "SeriesName/Season 1")
-        rel_dir = ""
-        if source_root:
-            try:
-                rel_dir = os.path.relpath(dirname, source_root)
-                if rel_dir == ".": rel_dir = ""
-            except ValueError:
-                pass # Different drive
+        sub_folder = getattr(self.args, 'sub_folder', None) or "TV"
+        return os.path.join(self.args.dst, sub_folder, series_dir, season_dir, filename_str)
 
-        # Determine processor
-        # We look at the chain. If any LLM provider is in the chain, we prioritize batch LLM.
-        # This is a bit of a deviation from strict chain order, but beneficial for TV context.
-        # Alternatively, strict chain:
-        chain = getattr(self.args, 'chain', ['guessit'])
-        providers = getattr(self.args, 'providers', {})
-        
-        results = {}  # { filename: metadata }
-
-        for processor_name in chain:
-            processor_name = processor_name.strip()
-            
-            if processor_name == 'guessit':
-                # Use batch guessit (enhanced with path)
-                logger.info(f"Batch GuessIt for {len(siblings)} files in '{rel_dir}'")
-                results = self._extract_batch_guessit(rel_dir, siblings)
-            elif processor_name in providers:
-                config = providers[processor_name]
-                if config.get("type") == "llm":
-                    logger.info(f"Batch LLM ({processor_name}) for {len(siblings)} files in '{rel_dir}'")
-                    results = self._extract_batch_llm(rel_dir, siblings, config)
-            elif processor_name == "cli_llm" and getattr(self.args, "llm_api_key", None):
-                config = {
-                    "api_key": self.args.llm_api_key,
-                    "base_url": self.args.llm_api_base,
-                    "model": self.args.llm_model
-                }
-                logger.info(f"Batch CLI LLM for {len(siblings)} files in '{rel_dir}'")
-                results = self._extract_batch_llm(rel_dir, siblings, config)
-            succ, ratio = self._validate_batch(results)
-            logger.info(f"{processor_name} valid ratio: {ratio:.0%}")
-            if succ:
-                break
-        # Update cache
-        if results:
-            self.batch_cache[dirname] = results
-            return results.get(filename, {})
-        else:
-            # If all failed, store empty to avoid re-scanning?
-            self.batch_cache[dirname] = results
-            return {}
-
-    def _validate_batch(self, results):
-        # If at least 50% of files have valid metadata, consider batch success
-        if not results: return False, 0
-        valid_count = 0
-        total_count = len(results)
-        for meta in results.values():
-            if self._validate_metadata(meta)[0]:
-                valid_count += 1
-        ratio = valid_count / total_count if total_count > 0 else 0
-        return ratio >= 0.5, ratio
+    def _validate_metadata(self, metadata):
+        if not metadata:
+            return False, "Metadata extraction failed"
+        if not metadata.get("title"):
+            return False, "Missing title"
+        if metadata.get("episode") is None or type(metadata.get("episode")) is not int:
+            return False, "Missing episode number"
+        return True, "OK"
 
     def _extract_batch_llm(self, rel_dir, filenames, config):
         api_key = config.get("api_key")
@@ -148,53 +101,3 @@ class TVPlugin(BaseVideoPlugin):
         except Exception as e:
             logger.error(f"LLM Batch Error: {e}")
             return results
-
-    def _extract_batch_guessit(self, rel_dir, filenames):
-        results = {}
-        for fname in filenames:
-            # Construct a path that helps guessit: rel_dir + filename
-            # e.g. "Breaking Bad/Season 1/01.mkv"
-            fake_path = os.path.join(rel_dir, fname) if rel_dir else fname
-            
-            # Use guessit on the path
-            guess = guessit(fake_path, options={'type': 'episode'})
-            results[fname] = self._map_guessit_to_metadata(guess)
-        return results
-
-    def _map_guessit_to_metadata(self, guess):
-        return {
-            "title": guess.get("title"),
-            "season": guess.get("season", 1),
-            "episode": guess.get("episode"),
-            "type": "TV"
-        }
-    
-    def calculate_hash(self, metadata):
-        hash_data = {k: v for k, v in metadata.items() if k in ['title', 'season', 'episode', 'type']}
-        return hashlib.sha256(json.dumps(hash_data, sort_keys=True).encode('utf-8')).hexdigest()
-
-    def generate_target_path(self, metadata, filepath):
-        title = metadata.get("title")
-        if not title: return None
-        
-        season = metadata.get("season", 1)
-        episode = metadata.get("episode")
-        ext = os.path.splitext(filepath)[1]
-
-        series_dir = f"{title}"
-        season_dir = f"Season {season:02d}"
-        
-        filename_str = f"{title}-S{season:02d}E{episode:02d}{ext}"
-
-        sub_folder = getattr(self.args, 'sub_folder', None) or "TV"
-        return os.path.join(self.args.dst, sub_folder, series_dir, season_dir, filename_str)
-
-    def _validate_metadata(self, metadata):
-        # TV requires both title and episode
-        if not metadata:
-            return False, "Metadata extraction failed"
-        if not metadata.get("title"):
-            return False, "Missing title"
-        if metadata.get("episode") is None or type(metadata.get("episode")) is not int:
-            return False, "Missing episode number"
-        return True, "OK"

@@ -185,8 +185,8 @@ fix:
 
 ## stage2
 
-1. 现在已经又很多功能了，能不能写一个 readme.md 介绍整个项目，并提供一个 quick start 指南
-2. 现在 TV 的集数识别不够准确。我希望重构 TV 的处理逻辑。下载路径的 TV 通常只有这几种结构：
+r1. 现在已经又很多功能了，能不能写一个 readme.md 介绍整个项目，并提供一个 quick start 指南
+r2. 现在 TV 的集数识别不够准确。我希望重构 TV 的处理逻辑。下载路径的 TV 通常只有这几种结构：
 1）src_top_dir/series_season_X/series_ep_Y.mkv
 2）src_top_dir/series/season_X/series_ep_Y
 3）src_top_dir/searies_season_X_ep_Y.mkv。
@@ -220,3 +220,7 @@ webui 部分：
 2.fix2
 请 git diff HEAD~1 并记录我的修改： 1)我回退掉了 dst view 的修改，因为现在代码还是有问题，并且代码变复杂我也不想修了 2）我又修改了 tv.py 的处理逻辑，添加回了 validate_batch。
 请再修改一下 source view 文件名右侧显示元信息摘要，请分隔开 title, season, episode，否则不太容易阅读。
+
+r3. movie batch 处理
+
+1. 我希望 movie 也能支持 batch 处理。这样可以节约 llm 调用成本。你可以对读取到的新文件列表，按照一定的 batch size 调用 llm 进行处理。batch size 作为一个参数并可配置，-1 表示全部文件一起处理，其他正整数表示每次处理多少个文件。
