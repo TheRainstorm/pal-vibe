@@ -5,6 +5,9 @@ from src.plugins.base import BaseVideoPlugin
 from openai import OpenAI
 from guessit import guessit
 from src.metadata import VIDEO_EXTENSIONS
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 class TVPlugin(BaseVideoPlugin):
     def get_type_name(self):
@@ -21,6 +24,7 @@ class TVPlugin(BaseVideoPlugin):
         # Check cache
         if dirname in self.batch_cache:
             if filename in self.batch_cache[dirname]:
+                logger.debug(f"Cached metadata hit")
                 return self.batch_cache[dirname][filename]
         
         # Cache miss: Trigger batch processing for this directory
@@ -33,6 +37,7 @@ class TVPlugin(BaseVideoPlugin):
                     siblings.append(f)
         except OSError:
             siblings = [filename]
+        siblings.sort()
 
         # Calculate relative directory path for context (e.g. "SeriesName/Season 1")
         rel_dir = ""
@@ -51,59 +56,36 @@ class TVPlugin(BaseVideoPlugin):
         providers = getattr(self.args, 'providers', {})
         
         results = {}
-        processed = False
 
         for processor_name in chain:
             processor_name = processor_name.strip()
             
             if processor_name == 'guessit':
                 # Use batch guessit (enhanced with path)
-                # print(f"Batch GuessIt for {rel_dir}")
+                logger.info(f"Batch GuessIt for {len(siblings)} files in '{rel_dir}'")
                 results = self._extract_batch_guessit(rel_dir, siblings)
-                if self._validate_batch(results):
-                    processed = True
-                    break
-            
             elif processor_name in providers:
                 config = providers[processor_name]
                 if config.get("type") == "llm":
-                    print(f"Batch LLM ({processor_name}) for {len(siblings)} files in '{rel_dir}'")
+                    logger.info(f"Batch LLM ({processor_name}) for {len(siblings)} files in '{rel_dir}'")
                     results = self._extract_batch_llm(rel_dir, siblings, config)
-                    if self._validate_batch(results):
-                        processed = True
-                        break
-            
             elif processor_name == "cli_llm" and getattr(self.args, "llm_api_key", None):
                  config = {
                      "api_key": self.args.llm_api_key,
                      "base_url": self.args.llm_api_base,
                      "model": self.args.llm_model
                  }
-                 print(f"Batch CLI LLM for {len(siblings)} files in '{rel_dir}'")
+                 logger.info(f"Batch CLI LLM for {len(siblings)} files in '{rel_dir}'")
                  results = self._extract_batch_llm(rel_dir, siblings, config)
-                 if self._validate_batch(results):
-                    processed = True
-                    break
 
         # Update cache
-        if processed and results:
+        if results:
             self.batch_cache[dirname] = results
             return results.get(filename, {})
         else:
-            # If all failed, store empty to avoid re-scanning immediately? 
-            # Or maybe just for this file?
-            # Let's return empty for this file.
+            # If all failed, store empty to avoid re-scanning? 
+            self.batch_cache[dirname] = results
             return {}
-
-    def _validate_batch(self, results):
-        # If at least 50% of files have valid metadata, consider batch success?
-        # Or at least one? Let's say at least one valid title.
-        if not results: return False
-        valid_count = 0
-        for meta in results.values():
-            if meta and meta.get("title"):
-                valid_count += 1
-        return valid_count > 0
 
     def _extract_batch_llm(self, rel_dir, filenames, config):
         api_key = config.get("api_key")
@@ -143,7 +125,7 @@ class TVPlugin(BaseVideoPlugin):
             
             return data
         except Exception as e:
-            print(f"LLM Batch Error: {e}")
+            logger.error(f"LLM Batch Error: {e}")
             return {}
 
     def _extract_batch_guessit(self, rel_dir, filenames):
@@ -192,6 +174,6 @@ class TVPlugin(BaseVideoPlugin):
             return False, "Metadata extraction failed"
         if not metadata.get("title"):
             return False, "Missing title"
-        if metadata.get("episode") is None:
+        if metadata.get("episode") is None or type(metadata.get("episode")) is not int:
             return False, "Missing episode number"
         return True, "OK"

@@ -195,7 +195,6 @@ fix:
 2）有 series 目录时，可以将将包含目录名的路径一起给 guessit/llm 处理，从而提取更准确的元信息
 3）对于 llm，最好把一个 series_season 下所有文件名一起交给它处理，从而可以利用上下文更好地提取 title, season, episode 信息。要考虑如何让 llm 处理并返回多个文件的元数据。
 
-
 webui 部分：
 
 1）src 文件视角
@@ -206,3 +205,14 @@ webui 部分：
 （1）我希望增加一个 Tab，展示 dst 目录下的文件结构（media library 视角）。点击某个文件，可以展示该文件对应的源文件路径和元信息，并支持修改。修改后，触发重新链接该文件。
 
 （2））对于一个 TV series，我希望可以直接展示识别到了哪些 season 和 episode，展示为一个小方块不用显式列出文件名（占的空间太大了）。用户点击某一个 episode 方块，可以展示该集的元信息。集数应该是连贯的。对于不连贯的第一个集数，应该标记为红色。
+
+2.fix
+
+我已修复的，请 git diff HEAD~1 记录我的修改
+1. tv.py 使用了 print 而不是 logger 打印日志，我已修复
+2. 去除了 validate_batch 方法，识别失败就失败了，我只想节约 batch 处理的时间成本，我已修复
+
+你需要做的
+3. webui: src 视图显式，树形文件列表时，文件名右侧直接显式显示元信息摘要，比如 title, season, episode 等，方便用户快速查看
+4. logger 增强：1）对齐输出，比如 `WARNING - src.plugins.base` 和 `DEBUG - src.plugins.tv` 长度根本不一样。2）增加一点颜色，能不能有点高亮？现在纯白看起来有点难看。
+5. Library View 对于数据库只有一个 TV series，左边怎么直接展示了 TV episode 文件列表了。应该先显式 series 名称，然后是 season，然后是 episode 列表才对。

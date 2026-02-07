@@ -166,6 +166,7 @@ class BaseVideoPlugin:
         filename_metadata = self.extract_filename_metadata(filepath, source_root)
         current_hash = self.calculate_hash(filename_metadata)
         final_metadata = filename_metadata.copy()
+        logger.debug(f"Extract filename info: {filename_metadata}")
 
         # Step 3: Check validation
         is_valid, error_reason = self._validate_metadata(filename_metadata)
@@ -176,8 +177,8 @@ class BaseVideoPlugin:
             return
 
         # Step 4: FFmpeg scan
-        logger.info(f"Scanning technical info...")
         ffmpeg_info = get_video_info_ffmpeg(filepath)
+        logger.debug(f"Scanning ffmpeg info: {ffmpeg_info}")
         final_metadata.update(ffmpeg_info)
 
         # Step 5: Generate Link
