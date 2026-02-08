@@ -204,15 +204,27 @@
                             {{ focusedFile.full_path }}
                         </div>
 
-                        <div v-for="key in ['title', 'season', 'year']" :key="key" class="mb-4">
+                         <div v-for="key in ['title', 'season', 'year']" :key="key" class="mb-4">
                             <label class="block text-xs font-bold text-gray-500 uppercase mb-1 flex justify-between">
                                 {{ key }}
                                 <span v-if="selectedPaths.size > 1 && isMixed(key)" class="text-orange-500 lowercase text-[9px] font-bold">Mixed</span>
                             </label>
-                            <input v-model="editMetadata[key]" 
+                            <input v-model="editMetadata[key]"
+                                   :type="key === 'season' || key === 'year' ? 'number' : 'text'"
                                    :placeholder="isMixed(key) ? 'Set new common value...' : ''"
                                    class="w-full border border-gray-300 p-2.5 rounded text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                                    :class="{'bg-orange-50 border-orange-200': isMixed(key)}">
+                        </div>
+                        
+                        <div class="mb-4">
+                            <label class="block text-xs font-bold text-gray-500 uppercase mb-1 flex justify-between">
+                                ignore
+                                <span v-if="selectedPaths.size > 1 && isMixed('ignore')" class="text-orange-500 lowercase text-[9px] font-bold">Mixed</span>
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" v-model="editMetadata.ignore" class="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500">
+                                <span class="text-sm text-gray-700">Ignore this file</span>
+                            </label>
                         </div>
                         
                         <div class="mb-4">
@@ -476,7 +488,7 @@
                     collapse(srcFileTree.value);
                 };
 
-                const saveToStage = () => {
+                 const saveToStage = () => {
                     let targets = [];
                     if (selectedPaths.value.size > 0) {
                         targets = Array.from(selectedPaths.value).sort();
@@ -485,13 +497,21 @@
                     }
                     if (targets.length === 0) return;
 
+                    const convertValue = (key, value) => {
+                        if (value === undefined || value === null || value === '' || value === 'Mixed...') return undefined;
+                        if (['season', 'year', 'episode'].includes(key)) return Number(value);
+                        if (key === 'ignore') return Boolean(value);
+                        return value;
+                    };
+
                     targets.forEach((path, idx) => {
                         const node = nodeMap.value.get(path);
                         const originalMeta = node.metadata || {};
                         const newMeta = { ...originalMeta };
                         for (const [k, v] of Object.entries(editMetadata.value)) {
-                            if (v !== undefined && v !== null && v !== '' && v !== 'Mixed...') {
-                                newMeta[k] = v;
+                            const converted = convertValue(k, v);
+                            if (converted !== undefined) {
+                                newMeta[k] = converted;
                             }
                         }
                         if (isSequencePending.value) newMeta.episode = seqStart.value + idx;

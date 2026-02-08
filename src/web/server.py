@@ -433,6 +433,7 @@ async def _process_metadata_update(update: MetadataUpdate):
     if plugin._check_and_fix_metadata(update.metadata):
         logger.info(f"Fixed metadata types for {update.full_path}")
     
+    logger.debug(f"Updating metadata for {update.full_path}: {update.metadata}")
     db.update_video_entry(
         update.source_root, 
         args.dst, 

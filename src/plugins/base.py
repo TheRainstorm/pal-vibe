@@ -263,12 +263,13 @@ class BaseVideoPlugin:
         soft_link = getattr(self.args, 'soft_link', True)
         dst_root = getattr(self.args, "dst") 
         final_metadata = db_entry["metadata"]
+        old_db_hash = db_entry.get("metadata_hash")
         current_db_hash = self.calculate_hash(final_metadata)
         
         if self._check_and_fix_metadata(final_metadata):
             logger.warning(f"Fixed metadata for {filepath}, somewhere (webui/human) write invalid metadata to db")
 
-        if db_entry.get("metadata_hash") == current_db_hash:
+        if old_db_hash == current_db_hash:
             # Consistent. Check Error State.
             if db_entry.get("error"):
                 return
@@ -293,7 +294,7 @@ class BaseVideoPlugin:
                 if old_target:
                     logger.info(f"Removing old link due to invalid metadata: {old_target}")
                     remove_link_and_empty_dirs(old_target)
-                    self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_db_hash)
+                self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_db_hash)
                 return
             
             is_valid, error_reason = self._validate_metadata(final_metadata)
