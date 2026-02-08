@@ -64,9 +64,20 @@ class TVPlugin(BaseVideoPlugin):
         prompt += "Do not include any markdown formatting, just the raw JSON."
         return prompt
 
-    def _fix_extracted_metadata(self, meta):
-        if isinstance(meta.get("season"), str) and meta["season"].isdigit(): meta["season"] = int(meta["season"])
-        if isinstance(meta.get("episode"), str) and meta["episode"].isdigit(): meta["episode"] = int(meta["episode"])
+    def _check_and_fix_metadata(self, meta):
+        """
+        convert integers, etc.
+        """
+        have_fixed = False
+        def check_int_field(field_name):
+            nonlocal have_fixed
+            if field_name in meta:
+                if isinstance(meta[field_name], str) and meta[field_name].isdigit():
+                    meta[field_name] = int(meta[field_name])
+                    have_fixed = True
+        check_int_field('season')
+        check_int_field('episode')
+        return have_fixed
 
     def calculate_hash(self, metadata):
         hash_data = {k: v for k, v in metadata.items() if k in ['title', 'season', 'episode', 'type']}

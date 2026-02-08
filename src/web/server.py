@@ -430,6 +430,8 @@ async def _process_metadata_update(update: MetadataUpdate):
     
     old_target = entry.get("target_path") if entry else None
     old_hash = entry.get("metadata_hash")
+    if plugin._check_and_fix_metadata(update.metadata):
+        logger.info(f"Fixed metadata types for {update.full_path}")
     
     db.update_video_entry(
         update.source_root, 

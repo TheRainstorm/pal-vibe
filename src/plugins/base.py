@@ -57,8 +57,10 @@ class BaseVideoPlugin:
             if self._needs_extraction(f, db_entry):
                 files_to_extract.append(f)
             else:
+                # process existing entry
                 self._process_existing_db_entry(f, db_entry, source_root)
 
+        # process new files
         batches = self._group_files(files_to_extract)
         logger.info(f"Processing {len(files_to_extract)} files in {len(batches)} batches...")
         
@@ -98,13 +100,8 @@ class BaseVideoPlugin:
     def _map_guessit_to_metadata(self, guess):
         raise NotImplementedError
 
-    def _fix_extracted_metadata(self, meta):
-        """
-        convert integers, etc.
-        """
-        if 'type' not in meta:
-            meta['type'] = self.get_type_name()
-        return meta
+    def _check_and_fix_metadata(self, meta):
+        return False
     
     def _validate_metadata(self, metadata): 
         if not metadata or not metadata.get("title"):
@@ -164,7 +161,7 @@ class BaseVideoPlugin:
                 succ, ratio = self._validate_batch(current_results)
                 if succ:
                     for k, v in current_results.items():
-                        self._fix_extracted_metadata(v)
+                        self._check_and_fix_metadata(v)
                         results[k] = v
                     break
             logger.info(f"{processor_name}: valid ratio {ratio*100:.1f}%")
@@ -268,6 +265,9 @@ class BaseVideoPlugin:
         final_metadata = db_entry["metadata"]
         current_db_hash = self.calculate_hash(final_metadata)
         
+        if self._check_and_fix_metadata(final_metadata):
+            logger.warning(f"Fixed metadata for {filepath}, somewhere (webui/human) write invalid metadata to db")
+
         if db_entry.get("metadata_hash") == current_db_hash:
             # Consistent. Check Error State.
             if db_entry.get("error"):
