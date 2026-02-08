@@ -1,6 +1,7 @@
 import os
 import yaml
 import json
+import time
 from src.logger import get_logger
 
 logger = get_logger(__name__)
@@ -72,7 +73,8 @@ class VideoDatabase:
             "metadata_hash": entry.get("metadata_hash"),
             "target_path": abs_target_path,
             "error": entry.get("error"),
-            "dst_root": dst_root
+            "dst_root": dst_root,
+            "added_at": entry.get("added_at")
         }
 
     def update_video_entry(self, src_root, dst_root, src_filepath, metadata, target_path, metadata_hash, error=None):
@@ -95,10 +97,13 @@ class VideoDatabase:
             except ValueError:
                 rel_target = target_path # Fallback to absolute if on different drive
 
+        existing_entry = self.data["roots"][src_root]["files"].get(rel_src)
+        
         entry = {
             "metadata": metadata,
             "metadata_hash": metadata_hash,
-            "target": rel_target
+            "target": rel_target,
+            "added_at": existing_entry.get("added_at", time.time()) if existing_entry else time.time()
         }
         if error:
             entry["error"] = error

@@ -27,6 +27,7 @@ def get_global_defaults():
     return {
         "db": "pal_database.yaml",
         "soft_link": True,
+        "min_file_size": 100,
         "batch_size": 26,
         "retry_failed": False,
         "monitor_src": False,
@@ -126,8 +127,9 @@ def run_task_once(task_config, db_cache, global_providers):
     logger.info(f"Chain: {args.chain}")
     logger.info(f"Database: {db.db_path}")
 
-    found_files = scan_video_files(source_root)
-    logger.info(f"Found {len(found_files)} files in source directory.")
+    min_size = getattr(args, "min_file_size", 100)
+    found_files = scan_video_files(source_root, min_size_mb=min_size)
+    logger.info(f"Found {len(found_files)} files in source directory (min size: {min_size}MB).")
     
     # Cleanup logic encapsulated
     cleanup_removed_files(db, source_root, set(found_files))
@@ -151,6 +153,7 @@ if __name__ == "__main__":
     parser.add_argument("--sub-folder", help="Subfolder name within destination.")
     parser.add_argument("--db", default="pal_database.yaml", help="Database file path.")
     parser.add_argument("--batch-size", type=int, default=26, help="Batch size for metadata extraction.")
+    parser.add_argument("--min-file-size", type=int, default=100, help="Minimum file size in MB (default 100).")
     parser.add_argument("--retry-failed", action="store_true", help="Retry files previously marked as errors even if hash matches.")
     
     parser.add_argument("--chain", help="Comma separated processing chain.")

@@ -64,11 +64,13 @@ class FileNode(BaseModel):
     status: Optional[str] = None # 'linked', 'missing', 'error', 'scanned'
     # Extra for DST view
     source_path: Optional[str] = None
+    added_at: Optional[float] = None
 
 class StatsResponse(BaseModel):
     src_files_count: int
     dst_files_count: int
     error_files_count: int
+    ignored_files_count: int
     tasks_count: int
 
 class MetadataUpdate(BaseModel):
@@ -80,20 +82,34 @@ class BatchMetadataUpdate(BaseModel):
     updates: List[MetadataUpdate]
 
 # --- Helpers ---
-def build_file_tree_from_paths(paths: List[str], root_path: str, db: VideoDatabase) -> List[FileNode]:
+def build_file_tree_from_paths(paths: List[str], root_path: str, db: VideoDatabase, sort_by="name", order="asc") -> List[FileNode]:
     tree = []
-    # Convert to relative paths
-    rel_paths = []
+    # Convert to relative paths and gather data for sorting
+    items = []
     for p in paths:
         try:
             rel = os.path.relpath(p, root_path)
-            rel_paths.append((rel, p))
+            entry = db.get_video_entry(root_path, p)
+            ts = entry.get("added_at", 0) if entry else 0
+            items.append({
+                "rel": rel,
+                "full": p,
+                "ts": ts,
+                "name": os.path.basename(rel)
+            })
         except ValueError:
             continue
     
-    rel_paths.sort()
+    # Sort items
+    reverse = (order == "desc")
+    if sort_by == "date":
+        items.sort(key=lambda x: (x["ts"], x["rel"]), reverse=reverse)
+    else:
+        items.sort(key=lambda x: x["rel"], reverse=reverse)
 
-    for rel_path, full_path in rel_paths:
+    for item in items:
+        rel_path = item["rel"]
+        full_path = item["full"]
         parts = rel_path.split(os.sep)
         filename = parts[-1]
         
@@ -142,7 +158,8 @@ def build_file_tree_from_paths(paths: List[str], root_path: str, db: VideoDataba
             type='file',
             metadata=meta,
             error=err,
-            status=status
+            status=status,
+            added_at=entry.get("added_at") if entry else None
         )
         current_children.append(node)
 
@@ -288,6 +305,7 @@ async def get_stats():
     src_count = 0
     dst_count = 0
     error_count = 0
+    ignored_count = 0
     
     for task in state.tasks:
         src_root = task.get("src")
@@ -301,18 +319,39 @@ async def get_stats():
                 entry = db.get_video_entry(src_root, f)
                 if entry:
                     if entry.get("error"): error_count += 1
-                    if entry.get("target_path") and os.path.exists(entry["target_path"]):
+                    meta = entry.get("metadata")
+                    if meta and meta.get("ignore"): ignored_count += 1
+                    elif entry.get("target_path") and os.path.exists(entry["target_path"]):
                         dst_count += 1
     
     return StatsResponse(
         src_files_count=src_count,
         dst_files_count=dst_count,
         error_files_count=error_count,
+        ignored_files_count=ignored_count,
         tasks_count=len(state.tasks)
     )
 
+@app.get("/api/tasks/{task_id}/fields")
+async def get_task_fields(task_id: int):
+    if task_id >= len(state.tasks) or task_id < 0:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    task_config = state.tasks[task_id]
+    result = prepare_and_check_task(task_config, state.db_cache, state.global_providers)
+    if not result:
+        return []
+    
+    args, db, PluginClass = result
+    # We don't need to instantiate fully if get_editable_fields is static-ish, 
+    # but it's an instance method in my design.
+    plugin = PluginClass(db, args)
+    if hasattr(plugin, 'get_editable_fields'):
+        return plugin.get_editable_fields()
+    return []
+
 @app.get("/api/tasks/{task_id}/tree")
-async def get_task_tree(task_id: int):
+async def get_task_tree(task_id: int, sort_by: str = "name", order: str = "asc"):
     if task_id >= len(state.tasks) or task_id < 0:
         raise HTTPException(status_code=404, detail="Task not found")
     
@@ -325,7 +364,7 @@ async def get_task_tree(task_id: int):
         return []
     
     files = db.get_files_by_source_root(src_root)
-    return build_file_tree_from_paths(files, src_root, db)
+    return build_file_tree_from_paths(files, src_root, db, sort_by=sort_by, order=order)
 
 @app.get("/api/dst/tree")
 async def get_dst_tree():

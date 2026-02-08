@@ -62,16 +62,24 @@ def get_video_info_ffmpeg(filepath):
     return video_info
 
 
-def scan_video_files(src_dir):
+def scan_video_files(src_dir, min_size_mb=0):
     """
     Recursively scans the source directory for video files.
     Returns a list of normalized paths to video files.
     """
     video_files = []
+    min_size_bytes = min_size_mb * 1024 * 1024
     for root, _, files in os.walk(src_dir):
         for file in files:
             if file.lower().endswith(VIDEO_EXTENSIONS):
-                video_files.append(os.path.normpath(os.path.join(root, file)))
+                full_path = os.path.join(root, file)
+                if min_size_bytes > 0:
+                    try:
+                        if os.path.getsize(full_path) < min_size_bytes:
+                            continue
+                    except OSError:
+                        continue
+                video_files.append(os.path.normpath(full_path))
     return video_files
 
 def generate_version_str(metadata):

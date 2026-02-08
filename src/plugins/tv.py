@@ -11,6 +11,14 @@ class TVPlugin(BaseVideoPlugin):
     def get_type_name(self):
         return "TV"
 
+    def get_editable_fields(self):
+        return [
+            {"key": "title", "type": "text", "label": "Series Title"},
+            {"key": "season", "type": "number", "label": "Season"},
+            {"key": "episode", "type": "number", "label": "Episode"},
+            {"key": "ignore", "type": "checkbox", "label": "Ignore File"}
+        ]
+
     # Override: Group by Series Directory
     def _group_files(self, filepaths):
         source_root = getattr(self.args, "src")

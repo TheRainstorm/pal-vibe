@@ -11,6 +11,13 @@ class MoviePlugin(BaseVideoPlugin):
     def get_type_name(self):
         return "Movie"
 
+    def get_editable_fields(self):
+        return [
+            {"key": "title", "type": "text", "label": "Title"},
+            {"key": "year", "type": "text", "label": "Year"},
+            {"key": "ignore", "type": "checkbox", "label": "Ignore File"}
+        ]
+
     def _get_guessit_options(self):
         return {'type': 'movie'}
 

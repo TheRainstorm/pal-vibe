@@ -378,7 +378,7 @@ r5.1 扫描过滤
 
 r5.2 metadata 增加 ignore
 
-- 有该选项的话，不属于 error，属于 ignore，webui 右上角的状态可以增加 ignore files 数量。
+- 有该选项的话，不属于 error，属于 ignore
 
 r5.4 webui 交互
 
@@ -388,11 +388,16 @@ r5.4 webui 交互
 - 点击 Errors tab 自动展开时，应该默认展开 80% 高度，并且可以拖动修改高度
 - 点击 Errors tab 中的文件时，，Source view 的目录树应该自动展开定位到该文件
 
-r5.3. metadata 增加其它元数据
-
+依次完成以下功能，完成后总结每部分所有改动
+r5.1 扫描过滤：增加以下 task 级配置/选项：最小的文件大小单位MB，默认100MB，扫描时过滤掉小于该大小的视频文件（让这些文件不要出现在数据库）
+r5.2. metadata 增加其它元数据
 - metadata 增加添加到数据库的时间戳
 - 数据库 files 应该按照时间戳升序排序
-- webui 增加排序功能，支持按照文件名、时间戳排序
+- 第一次提取新视频文件数据时（在用 ffmpeg 提取视频信息的位置）增加提取文件大小元数据
+r5.3 webui 改进：
+- webui 右上角的状态增加 ignore files 数量
+- webui 增加排序功能，支持按照文件名、时间戳倒序/顺序
+- EDITOR 可以编辑的域应该从 plugin 获得，每种 plugin 增加一个方法，返回一个可编辑字段列表（现在就默认是所有的 meta 域）。EDITOR 也要遵守 meta 的类型
 
 r6. 解决目前特典导致的失败文件
 

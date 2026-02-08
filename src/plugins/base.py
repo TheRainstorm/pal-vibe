@@ -44,6 +44,22 @@ class BaseVideoPlugin:
 
     def get_type_name(self):
         raise NotImplementedError
+    
+    def get_editable_fields(self):
+        """
+        Returns a list of dicts describing editable fields for this plugin type.
+        Example:
+        [
+            {"key": "title", "type": "text", "label": "Title"},
+            {"key": "year", "type": "number", "label": "Year"},
+            {"key": "ignore", "type": "checkbox", "label": "Ignore File"}
+        ]
+        """
+        return [
+            {"key": "title", "type": "text", "label": "Title"},
+            {"key": "year", "type": "number", "label": "Year"},
+            {"key": "ignore", "type": "checkbox", "label": "Ignore File"}
+        ]
 
     def process_files(self, filepaths, source_root, force_reextract=False):
         """
@@ -355,6 +371,13 @@ class BaseVideoPlugin:
         # FFmpeg scan
         ffmpeg_info = get_video_info_ffmpeg(filepath)
         final_metadata.update(ffmpeg_info)
+        
+        # Add file size
+        try:
+            final_metadata['size'] = os.path.getsize(filepath)
+        except OSError:
+            pass
+
         logger.debug(f"ffmpeg_info: {ffmpeg_info}")
 
         # Generate Link

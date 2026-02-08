@@ -32,6 +32,7 @@
                 <div>Src: <b>{{ stats.src_files_count || 0 }}</b></div>
                 <div>Linked: <b class="text-green-600">{{ stats.dst_files_count || 0 }}</b></div>
                 <div>Errors: <b class="text-red-600">{{ stats.error_files_count || 0 }}</b></div>
+                <div>Ignored: <b class="text-gray-500">{{ stats.ignored_files_count || 0 }}</b></div>
                 <button @click="reloadAll" class="bg-gray-700 text-white px-3 py-1 rounded hover:bg-gray-600 ml-2 shadow-sm">Reload DB</button>
             </div>
         </header>
@@ -66,6 +67,14 @@
                             </span>
                         </div>
                         <div class="flex gap-2">
+                            <select v-model="sortBy" @change="refreshTree" class="text-xs border rounded p-1 bg-white">
+                                <option value="name">Name</option>
+                                <option value="date">Date</option>
+                            </select>
+                            <select v-model="sortOrder" @change="refreshTree" class="text-xs border rounded p-1 bg-white">
+                                <option value="asc">Asc</option>
+                                <option value="desc">Desc</option>
+                            </select>
                             <button @click="expandAll" class="text-xs text-gray-500 hover:text-gray-700">Expand All</button>
                             <button @click="collapseAll" class="text-xs text-gray-500 hover:text-gray-700">Collapse All</button>
                             <button v-if="selectedPaths.size > 0" @click="clearSelection" class="text-xs text-red-500 hover:underline ml-2">Clear</button>
@@ -207,36 +216,33 @@
                             {{ focusedFile.full_path }}
                         </div>
 
-                         <div v-for="key in ['title', 'season', 'year']" :key="key" class="mb-4">
+                         <div v-for="field in editableFields" :key="field.key" class="mb-4">
                             <label class="block text-xs font-bold text-gray-500 uppercase mb-1 flex justify-between">
-                                {{ key }}
-                                <span v-if="selectedPaths.size > 1 && isMixed(key)" class="text-orange-500 lowercase text-[9px] font-bold">Mixed</span>
+                                {{ field.label }}
+                                <span v-if="selectedPaths.size > 1 && isMixed(field.key)" class="text-orange-500 lowercase text-[9px] font-bold">Mixed</span>
                             </label>
-                            <input v-model="editMetadata[key]"
-                                   :type="key === 'season' || key === 'year' ? 'number' : 'text'"
-                                   :placeholder="isMixed(key) ? 'Set new common value...' : ''"
-                                   class="w-full border border-gray-300 p-2.5 rounded text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                                   :class="{'bg-orange-50 border-orange-200': isMixed(key)}">
-                        </div>
-                        
-                        <div class="mb-4">
-                            <label class="block text-xs font-bold text-gray-500 uppercase mb-1 flex justify-between">
-                                ignore
-                                <span v-if="selectedPaths.size > 1 && isMixed('ignore')" class="text-orange-500 lowercase text-[9px] font-bold">Mixed</span>
-                            </label>
-                            <label class="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" v-model="editMetadata.ignore" class="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500">
-                                <span class="text-sm text-gray-700">Ignore this file</span>
-                            </label>
-                        </div>
-                        
-                        <div class="mb-4">
-                            <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Episode</label>
-                            <div v-if="selectedPaths.size > 1" class="p-3 bg-gray-100 rounded text-xs text-gray-400 italic">
-                                <span v-if="isSequencePending">Sequential apply active</span>
-                                <span v-else>Set individually or use tool above.</span>
+                            
+                            <div v-if="field.type === 'checkbox'">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" v-model="editMetadata[field.key]" class="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500">
+                                    <span class="text-sm text-gray-700">{{ field.label }}</span>
+                                </label>
                             </div>
-                            <input v-else v-model.number="editMetadata.episode" class="w-full border p-2.5 rounded text-sm">
+                            
+                            <div v-else-if="field.key === 'episode'">
+                                <div v-if="selectedPaths.size > 1" class="p-3 bg-gray-100 rounded text-xs text-gray-400 italic">
+                                    <span v-if="isSequencePending">Sequential apply active</span>
+                                    <span v-else>Set individually or use tool above.</span>
+                                </div>
+                                <input v-else v-model.number="editMetadata[field.key]" class="w-full border p-2.5 rounded text-sm">
+                            </div>
+
+                            <input v-else
+                                   v-model="editMetadata[field.key]"
+                                   :type="field.type === 'number' ? 'number' : 'text'"
+                                   :placeholder="isMixed(field.key) ? 'Set new common value...' : ''"
+                                   class="w-full border border-gray-300 p-2.5 rounded text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                   :class="{'bg-orange-50 border-orange-200': isMixed(field.key)}">
                         </div>
                     </div>
                 </div>
@@ -359,6 +365,9 @@
                 const nodeMap = ref(new Map());
 
                 const editMetadata = ref({});
+                const editableFields = ref([]);
+                const sortBy = ref('name');
+                const sortOrder = ref('asc');
                 const batchPlaceholders = ref({});
                 const seqStart = ref(1);
                 const isSequencePending = ref(false);
@@ -377,6 +386,13 @@
                     };
                     scan(srcFileTree.value); scan(dstFileTree.value);
                     errorList.value.forEach(f => nodeMap.value.set(f.full_path, f));
+                };
+                
+                const refreshTree = async () => {
+                     if (selectedTask.value) {
+                         srcFileTree.value = await (await fetch(`/api/tasks/${selectedTask.value.id}/tree?sort_by=${sortBy.value}&order=${sortOrder.value}`)).json();
+                         rebuildNodeMap();
+                     }
                 };
 
                 const handleSelection = ({ node, event, isCheckbox }) => {
@@ -456,7 +472,10 @@
                         }
                     } else if (paths.length > 1) {
                         const nodes = paths.map(p => nodeMap.value.get(p)).filter(n => n);
-                        ['title', 'season', 'year'].forEach(k => {
+                        const fields = editableFields.value.map(f => f.key);
+                        if (!fields.length) fields.push('title', 'season', 'year', 'episode', 'ignore'); // Fallback
+
+                        fields.forEach(k => {
                             let first;
                             let allSame = true;
                             nodes.forEach(n => {
@@ -556,8 +575,11 @@
 
                     const convertValue = (key, value) => {
                         if (value === undefined || value === null || value === '' || value === 'Mixed...') return undefined;
-                        if (['season', 'year', 'episode'].includes(key)) return Number(value);
-                        if (key === 'ignore') return Boolean(value);
+                        const field = editableFields.value.find(f => f.key === key);
+                        if (field) {
+                            if (field.type === 'number') return Number(value);
+                            if (field.type === 'checkbox') return Boolean(value);
+                        }
                         return value;
                     };
 
@@ -669,7 +691,8 @@
                 const fetchDstTree = async () => { dstFileTree.value = await (await fetch('/api/dst/tree')).json(); rebuildNodeMap(); };
                 const selectTask = async (task) => {
                     selectedTask.value = task; clearSelection();
-                    srcFileTree.value = await (await fetch(`/api/tasks/${task.id}/tree`)).json();
+                    srcFileTree.value = await (await fetch(`/api/tasks/${task.id}/tree?sort_by=${sortBy.value}&order=${sortOrder.value}`)).json();
+                    editableFields.value = await (await fetch(`/api/tasks/${task.id}/fields`)).json();
                     rebuildNodeMap();
                 };
                 const triggerScan = async (tid) => {
@@ -705,7 +728,7 @@
                 return {
                     viewMode, stats, tasks, selectedTask, srcFileTree, dstFileTree, errorList, showErrorPanel,
                     focusedFile, selectedPaths, editMetadata, batchPlaceholders, seqStart, isSequencePending,
-                    stagedChanges, showStagingPanel, errorPanelHeight,
+                    stagedChanges, showStagingPanel, errorPanelHeight, editableFields, sortBy, sortOrder, refreshTree,
                     selectTask, triggerScan, reloadAll, handleSelection, closeEditor, save,
                     expandAll, collapseAll, saveToStage, saveAndApply, discardChanges, triggerReextract,
                     applySequence, isMixed, isTVSeries, groupEpisodes, clearSelection, startResize, handleErrorClick
