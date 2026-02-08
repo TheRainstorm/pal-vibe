@@ -65,7 +65,11 @@
                                 {{ selectedPaths.size }} selected
                             </span>
                         </div>
-                        <button v-if="selectedPaths.size > 0" @click="clearSelection" class="text-xs text-red-500 hover:underline">Clear Selection</button>
+                        <div class="flex gap-2">
+                            <button @click="expandAll" class="text-xs text-gray-500 hover:text-gray-700">Expand All</button>
+                            <button @click="collapseAll" class="text-xs text-gray-500 hover:text-gray-700">Collapse All</button>
+                            <button v-if="selectedPaths.size > 0" @click="clearSelection" class="text-xs text-red-500 hover:underline ml-2">Clear</button>
+                        </div>
                     </div>
                     
                     <div class="overflow-y-auto flex-1 p-4" @click.self="clearSelection">
@@ -74,6 +78,7 @@
                             :nodes="srcFileTree" 
                             :selected-paths="selectedPaths" 
                             :focused-id="focusedFile?.id"
+                            :staged-changes="stagedChanges"
                             @select="handleSelection">
                         </file-tree>
                     </div>
@@ -86,19 +91,41 @@
                         </span>
                         <span class="pr-2 text-xs text-gray-400">{{ showErrorPanel ? 'CLOSE' : 'OPEN' }}</span>
                     </div>
-                    
+
                     <div v-if="showErrorPanel" class="h-64 bg-white border-t overflow-y-auto p-2 transition-all">
-                        <div v-for="file in errorList" :key="file.id" 
+                        <div v-for="file in errorList" :key="file.id"
                              @click="handleSelection({node: file, event: $event})"
                              :class="{'selected': selectedPaths.has(file.full_path), 'focused': focusedFile?.id === file.id}"
                              class="tree-node hover:bg-gray-50 text-red-600 group mb-0.5">
-                            <input type="checkbox" 
+                            <input type="checkbox"
                                    :checked="selectedPaths.has(file.full_path)"
                                    @click.stop
                                    @change="handleSelection({node: file, event: $event, isCheckbox: true})">
                             <div class="flex-1 flex justify-between items-center min-w-0">
                                 <span class="truncate font-medium">{{ file.name }}</span>
                                 <span class="text-[10px] text-gray-400 ml-2 italic">{{ file.error }}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Staging Panel -->
+                    <div class="bg-orange-50 border-t p-2 cursor-pointer hover:bg-orange-100 flex justify-between items-center shrink-0"
+                         @click="showStagingPanel = !showStagingPanel">
+                        <span class="text-orange-700 font-bold text-sm flex items-center gap-2 pl-2">
+                            <span>✏️ Staged ({{ stagedChanges.size }})</span>
+                        </span>
+                        <span class="pr-2 text-xs text-gray-400">{{ showStagingPanel ? 'CLOSE' : 'OPEN' }}</span>
+                    </div>
+
+                    <div v-if="showStagingPanel" class="h-64 bg-white border-t overflow-y-auto p-2 transition-all">
+                        <div v-if="stagedChanges.size === 0" class="text-center text-gray-400 text-sm py-4">No staged changes</div>
+                        <div v-else>
+                            <div v-for="[path, metadata] in Array.from(stagedChanges.entries())" :key="path" class="tree-node hover:bg-gray-50 text-orange-600 group mb-0.5">
+                                <div class="flex-1 flex justify-between items-center min-w-0">
+                                    <span class="truncate font-medium text-gray-700">{{ path.split('/').pop() }}</span>
+                                    <button @click.stop="discardChanges(path)" class="text-[10px] text-red-500 hover:text-red-700 mr-2 border border-red-200 px-1 rounded hover:bg-red-50">Discard</button>
+                                </div>
+                                <div class="text-[9px] text-gray-400 pl-6 truncate">{{ metadata.title || 'No title' }}</div>
                             </div>
                         </div>
                     </div>
@@ -199,10 +226,14 @@
                     </div>
                 </div>
                 
-                <div class="p-4 border-t bg-gray-50">
-                    <button @click="save" class="bg-blue-600 text-white px-4 py-3 rounded hover:bg-blue-700 w-full font-bold shadow-lg transition-all flex justify-center items-center gap-2">
-                        <span>Save & Sync</span>
+                <div class="p-4 border-t bg-gray-50 flex flex-col gap-2">
+                    <button @click="save" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 w-full font-bold shadow-lg transition-all flex justify-center items-center gap-2">
+                        <span>✏️ Save (Stage)</span>
                         <span v-if="selectedPaths.size > 1" class="bg-blue-800 text-[10px] px-2 py-0.5 rounded-full">{{ selectedPaths.size }}</span>
+                    </button>
+                    <button @click="commitChanges" :disabled="stagedChanges.size === 0" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 w-full font-bold shadow-lg transition-all flex justify-center items-center gap-2" :class="{'opacity-50 cursor-not-allowed': stagedChanges.size === 0}">
+                        <span>✓ Apply (Commit)</span>
+                        <span class="bg-green-800 text-[10px] px-2 py-0.5 rounded-full">{{ stagedChanges.size }}</span>
                     </button>
                 </div>
             </div>
@@ -230,9 +261,10 @@
                         <span v-else-if="node.status === 'linked'">🟢</span>
                         <span v-else>⚪</span>
                     </span>
-                    
-                    <span class="truncate flex-1" :class="{'text-red-600': node.status === 'error', 'font-bold text-gray-800': node.type === 'folder', 'text-gray-600': node.type === 'file'}">
-                        {{ node.name }}
+
+                    <span class="truncate flex-1 flex items-center" :class="{'text-red-600': node.status === 'error', 'font-bold text-gray-800': node.type === 'folder', 'text-gray-600': node.type === 'file'}">
+                        <span>{{ node.name }}</span>
+                        <span v-if="node.type === 'file' && isStaged(node.full_path)" class="ml-2 text-orange-500 text-xs" title="Staged changes">✏️</span>
                     </span>
                     
                     <div v-if="node.type === 'file' && node.metadata && node.metadata.title" class="ml-4 flex items-center gap-1 text-[9px] font-bold opacity-40 group-hover:opacity-100 transition-opacity">
@@ -267,7 +299,7 @@
         const FileTree = {
             name: 'FileTree',
             template: '#file-tree-template',
-            props: ['nodes', 'selectedPaths', 'focusedId'],
+            props: ['nodes', 'selectedPaths', 'focusedId', 'stagedChanges'],
             emits: ['select'],
             setup(props, { emit }) {
                 const handleClick = (node, event) => {
@@ -284,7 +316,8 @@
                     const s = f.filter(item => props.selectedPaths.has(item.full_path)).length;
                     return s > 0 && s < f.length;
                 };
-                return { handleClick, isSelected, isFolderSelected, isFolderPartial };
+                const isStaged = (path) => props.stagedChanges && props.stagedChanges.has(path);
+                return { handleClick, isSelected, isFolderSelected, isFolderPartial, isStaged };
             }
         };
 
@@ -309,6 +342,10 @@
                 const batchPlaceholders = ref({});
                 const seqStart = ref(1);
                 const isSequencePending = ref(false);
+
+                // Staging system
+                const stagedChanges = ref(new Map());
+                const showStagingPanel = ref(false);
 
                 const rebuildNodeMap = () => {
                     nodeMap.value.clear();
@@ -377,21 +414,38 @@
                 const loadEditor = () => {
                     editMetadata.value = {}; batchPlaceholders.value = {}; isSequencePending.value = false;
                     const paths = Array.from(selectedPaths.value);
-                    
+
                     if (paths.length === 0 && focusedFile.value) {
                         // Single Focus Mode (based on focusedFile)
-                        if(focusedFile.value.metadata) editMetadata.value = JSON.parse(JSON.stringify(focusedFile.value.metadata));
+                        // Priority: stagedChanges > original metadata
+                        const staged = stagedChanges.value.get(focusedFile.value.full_path);
+                        const meta = staged ? JSON.parse(JSON.stringify(staged)) :
+                                       (focusedFile.value.metadata ? JSON.parse(JSON.stringify(focusedFile.value.metadata)) : {});
+                        editMetadata.value = meta;
                         return;
                     }
 
                     if (paths.length === 1) {
                         const node = nodeMap.value.get(paths[0]);
-                        if(node && node.metadata) editMetadata.value = JSON.parse(JSON.stringify(node.metadata));
+                        if(node) {
+                            // Priority: stagedChanges > original metadata
+                            const staged = stagedChanges.value.get(paths[0]);
+                            const meta = staged ? JSON.parse(JSON.stringify(staged)) :
+                                           (node.metadata ? JSON.parse(JSON.stringify(node.metadata)) : {});
+                            editMetadata.value = meta;
+                        }
                     } else if (paths.length > 1) {
                         const nodes = paths.map(p => nodeMap.value.get(p)).filter(n => n);
                         ['title', 'season', 'year'].forEach(k => {
-                            const first = nodes[0].metadata ? nodes[0].metadata[k] : undefined;
-                            if (nodes.every(n => (n.metadata ? n.metadata[k] : undefined) === first)) editMetadata.value[k] = first;
+                            let first;
+                            let allSame = true;
+                            nodes.forEach(n => {
+                                const staged = stagedChanges.value.get(n.full_path);
+                                const val = staged ? staged[k] : (n.metadata ? n.metadata[k] : undefined);
+                                if (first === undefined) first = val;
+                                else if (val !== first) allSame = false;
+                            });
+                            if (allSame) editMetadata.value[k] = first;
                             else batchPlaceholders.value[k] = 'Mixed...';
                         });
                     }
@@ -399,7 +453,31 @@
 
                 const applySequence = () => { isSequencePending.value = true; alert("Auto-sequence queued."); };
 
-                const save = async () => {
+                const expandAll = () => {
+                    const expand = (nodes) => {
+                        nodes.forEach(n => {
+                            if (n.type === 'folder') {
+                                n.isOpen = true;
+                                if (n.children) expand(n.children);
+                            }
+                        });
+                    };
+                    expand(srcFileTree.value);
+                };
+
+                const collapseAll = () => {
+                    const collapse = (nodes) => {
+                        nodes.forEach(n => {
+                            if (n.type === 'folder') {
+                                n.isOpen = false;
+                                if (n.children) collapse(n.children);
+                            }
+                        });
+                    };
+                    collapse(srcFileTree.value);
+                };
+
+                const saveToStage = () => {
                     let targets = [];
                     if (selectedPaths.value.size > 0) {
                         targets = Array.from(selectedPaths.value).sort();
@@ -408,25 +486,57 @@
                     }
                     if (targets.length === 0) return;
 
-                    const updates = targets.map((path, idx) => {
+                    targets.forEach((path, idx) => {
                         const node = nodeMap.value.get(path);
-                        const newMeta = { ...(node.metadata || {}) };
+                        const originalMeta = node.metadata || {};
+                        const newMeta = { ...originalMeta };
                         for (const [k, v] of Object.entries(editMetadata.value)) {
-                            if (v !== undefined && v !== null && v !== '' && v !== 'Mixed...') newMeta[k] = v;
+                            if (v !== undefined && v !== null && v !== '' && v !== 'Mixed...') {
+                                newMeta[k] = v;
+                            }
                         }
                         if (isSequencePending.value) newMeta.episode = seqStart.value + idx;
-                        return { full_path: path, source_root: selectedTask.value?.src || "", metadata: newMeta };
+                        stagedChanges.value.set(path, newMeta);
                     });
+                    alert(`Staged ${targets.length} file(s) for commit`);
+                };
+
+                const commitChanges = async () => {
+                    if (stagedChanges.value.size === 0) {
+                        alert("No staged changes to commit");
+                        return;
+                    }
+                    if (!confirm(`Commit ${stagedChanges.value.size} staged change(s)?`)) return;
+
+                    const updates = [];
+                    for (const [path, metadata] of stagedChanges.value.entries()) {
+                        const node = nodeMap.value.get(path);
+                        updates.push({
+                            full_path: path,
+                            source_root: node?.source_root || selectedTask.value?.src || "",
+                            metadata: metadata
+                        });
+                    }
 
                     const res = await fetch('/api/files/batch_update', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ updates })
                     });
+
                     if (res.ok) {
-                        alert("Sync Complete!");
+                        alert("Commit Complete!");
+                        stagedChanges.value.clear();
                         if (selectedTask.value) await selectTask(selectedTask.value);
                         fetchStats(); fetchErrors(); fetchDstTree(); clearSelection(); closeEditor();
                     }
+                };
+
+                const discardChanges = (path) => {
+                    stagedChanges.value.delete(path);
+                };
+
+                const save = async () => {
+                    saveToStage();
                 };
 
                 const isMixed = (k) => batchPlaceholders.value[k] === 'Mixed...';
@@ -472,7 +582,9 @@
                 return {
                     viewMode, stats, tasks, selectedTask, srcFileTree, dstFileTree, errorList, showErrorPanel,
                     focusedFile, selectedPaths, editMetadata, batchPlaceholders, seqStart, isSequencePending,
+                    stagedChanges, showStagingPanel,
                     selectTask, triggerScan, reloadAll, handleSelection, closeEditor, save,
+                    expandAll, collapseAll, saveToStage, commitChanges, discardChanges,
                     applySequence, isMixed, isTVSeries, groupEpisodes, clearSelection
                 };
             }

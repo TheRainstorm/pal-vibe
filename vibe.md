@@ -363,3 +363,5 @@ r4. webui 改进
        * 如果 selectedPaths 为空，编辑器显示 focusedFile 的信息。
        * 如果 selectedPaths 有多项，编辑器自动进入 Batch Mode。
 
+1）增加一个全部展开/折叠按钮
+2）可以修改多个文件元信息，Editor 修改后分为 Save 和 Apply，前者把修改保存在网页，apply 则是立即应用修改，并触发后端更新数据库和重新链接。

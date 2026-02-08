@@ -20,11 +20,11 @@ def create_link(src_file, target_path, is_soft_link=True):
     try:
         if is_soft_link:
             os.symlink(src_file, target_path)
-            logger.debug(f"Created soft link: {target_path} -> {src_file}")
+            logger.info(f"Created soft link: {target_path} -> {src_file}")
         else:
             # For hard links, source and destination must be on the same filesystem
             os.link(src_file, target_path)
-            logger.debug(f"Created hard link: {target_path} -> {src_file}")
+            logger.info(f"Created hard link: {target_path} -> {src_file}")
     except OSError as e:
         logger.error(f"Error creating link from {src_file} to {target_path}: {e}")
 
