@@ -26,6 +26,7 @@ class MoviePlugin(BaseVideoPlugin):
         prompt += "Return a JSON Object where keys are filenames and values are metadata objects. "
         prompt += "Each metadata object must have: title (string), year (string). "
         prompt += "Use null for missing fields."
+        prompt += "Use chinese title if filename contain chinese"
         return prompt
 
     def calculate_hash(self, metadata):
