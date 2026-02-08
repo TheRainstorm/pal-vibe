@@ -380,6 +380,10 @@ r5.2 metadata 增加 ignore
 
 - 有该选项的话，不属于 error，属于 ignore，webui 右上角的状态可以增加 ignore files 数量。
 
+r5.4 webui 交互
+
+- 添加 reextract 按钮，支持多选文件后，重新扫描元数据
+
 r5.3. metadata 增加其它元数据
 
 - metadata 增加添加到数据库的时间戳

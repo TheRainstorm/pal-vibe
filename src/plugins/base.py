@@ -45,7 +45,7 @@ class BaseVideoPlugin:
     def get_type_name(self):
         raise NotImplementedError
 
-    def process_files(self, filepaths, source_root):
+    def process_files(self, filepaths, source_root, force_reextract=False):
         """
         Main entry point. Groups files and processes them in batches.
         filepaths: file paths relative to source_root
@@ -54,7 +54,7 @@ class BaseVideoPlugin:
         files_to_extract = []
         for f in filepaths:
             db_entry = self.db.get_video_entry(source_root, f)
-            if self._needs_extraction(f, db_entry):
+            if force_reextract or self._needs_extraction(f, db_entry):
                 files_to_extract.append(f)
             else:
                 # process existing entry

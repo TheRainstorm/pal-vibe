@@ -470,6 +470,42 @@ async def batch_update_metadata(batch: BatchMetadataUpdate):
         return {"status": "partial_success", "updated": count, "errors": errors}
     return {"status": "success", "updated": count}
 
+class ReextractRequest(BaseModel):
+    filepaths: List[str]
+    source_root: str
+
+@app.post("/api/reextract")
+async def reextract_files(request: ReextractRequest):
+    """Force reextract metadata for selected files."""
+    task_config = None
+    for task in state.tasks:
+        if task.get("src") == request.source_root:
+            task_config = task
+            break
+
+    if not task_config:
+        raise HTTPException(status_code=404, detail="Source root not found")
+
+    result = prepare_and_check_task(task_config, state.db_cache, state.global_providers)
+    if not result:
+        raise HTTPException(status_code=500, detail="Failed to prepare task")
+
+    args, db, PluginClass = result
+    plugin = PluginClass(db, args)
+
+    logger.info(
+        f"Force reextract for {len(request.filepaths)} files from {request.source_root}"
+    )
+
+    try:
+        plugin.process_files(
+            request.filepaths, request.source_root, force_reextract=True
+        )
+        return {"status": "success", "files_processed": len(request.filepaths)}
+    except Exception as e:
+        logger.error(f"Reextract error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

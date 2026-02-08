@@ -238,13 +238,17 @@
                     </div>
                 </div>
                 
-                <div class="p-4 border-t bg-gray-50 flex flex-col gap-2">
+                 <div class="p-4 border-t bg-gray-50 flex flex-col gap-2">
                     <button @click="saveToStage" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 w-full font-bold shadow-lg transition-all flex justify-center items-center gap-2">
                         <span>✏️ Save</span>
                         <span v-if="selectedPaths.size > 1" class="bg-blue-800 text-[10px] px-2 py-0.5 rounded-full">{{ selectedPaths.size }}</span>
                     </button>
                     <button @click="saveAndApply" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 w-full font-bold shadow-lg transition-all flex justify-center items-center gap-2">
                         <span>✓ Save & Apply</span>
+                    </button>
+                    <button @click="triggerReextract" class="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 w-full font-bold shadow-lg transition-all flex justify-center items-center gap-2">
+                        <span>🔄 Reextract</span>
+                        <span v-if="selectedPaths.size > 1" class="bg-purple-800 text-[10px] px-2 py-0.5 rounded-full">{{ selectedPaths.size }}</span>
                     </button>
                 </div>
             </div>
@@ -558,6 +562,42 @@
                     }
                 };
 
+                const triggerReextract = async () => {
+                    let targets = [];
+                    if (selectedPaths.value.size > 0) {
+                        targets = Array.from(selectedPaths.value).sort();
+                    } else if (focusedFile.value) {
+                        targets = [focusedFile.value.full_path];
+                    }
+                    if (targets.length === 0) return;
+                    if (!confirm(`Reextract metadata for ${targets.length} file(s)?`)) return;
+
+                    const sourceRoot = selectedTask.value?.src || (focusedFile.value?.source_path && focusedFile.value.source_root);
+                    if (!sourceRoot) {
+                        alert("Source root not found");
+                        return;
+                    }
+
+                    try {
+                        const res = await fetch('/api/reextract', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ filepaths: targets, source_root: sourceRoot })
+                        });
+
+                        if (res.ok) {
+                            const result = await res.json();
+                            alert(`Reextracted ${result.files_processed} file(s)`);
+                            if (selectedTask.value) await selectTask(selectedTask.value);
+                            fetchStats(); fetchErrors(); fetchDstTree();
+                        } else {
+                            alert("Reextract failed: " + await res.text());
+                        }
+                    } catch (e) {
+                        alert("Error: " + e);
+                    }
+                };
+
                 const discardChanges = (path) => {
                     stagedChanges.value.delete(path);
                 };
@@ -611,7 +651,7 @@
                     focusedFile, selectedPaths, editMetadata, batchPlaceholders, seqStart, isSequencePending,
                     stagedChanges, showStagingPanel,
                     selectTask, triggerScan, reloadAll, handleSelection, closeEditor, save,
-                    expandAll, collapseAll, saveToStage, saveAndApply, discardChanges,
+                    expandAll, collapseAll, saveToStage, saveAndApply, discardChanges, triggerReextract,
                     applySequence, isMixed, isTVSeries, groupEpisodes, clearSelection
                 };
             }
