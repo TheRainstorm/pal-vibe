@@ -96,7 +96,7 @@ class BaseVideoPlugin:
         Default: Chunk by batch_size.
         """
         batch_size = getattr(self.args, 'batch_size', 26)
-        if batch_size is None or batch_size <= 0: batch_size = 26
+        if batch_size is None or batch_size <= 0: batch_size = len(filepaths)
 
         groups = []
         for i in range(0, len(filepaths), batch_size):
@@ -212,8 +212,9 @@ class BaseVideoPlugin:
         if not prompt: 
             return {}
 
+        logger.debug(f"{prompt=}")
         response_data = self._call_llm(config, prompt)
-        logger.debug(f"{prompt=}\n\n{response_data=}")
+        logger.debug(f"{response_data=}")
         if not isinstance(response_data, dict): return {}
 
         # Map keys back to abs paths

@@ -399,6 +399,14 @@ r5.3 webui 改进：
 - webui 增加排序功能，支持按照文件名、时间戳倒序/顺序
 - EDITOR 可以编辑的域应该从 plugin 获得，每种 plugin 增加一个方法，返回一个可编辑字段列表（现在就默认是所有的 meta 域）。EDITOR 也要遵守 meta 的类型
 
+- task 配置增加 task_name，用于 webui 显式左侧 task 列表时更加美观，不存在时使用 src 路径。
+- webui task 列表显式美化：包含 task_name，统计数据（Src，Linked，Erro，Ignored: 234）
+- 展示 error 时展示当前选中的 task 的
+- 进入 webui 时，默认选中第一个 task
+- 现在在 webui shift 多选/鼠标左键拖动 error tab 是时，浏览器会选中文字，影响观感体验，能不能禁止
+- 目前点击文件，右侧显式的 Editor 只显式了 get_editable_fields 获得的字段。能不能增加显式所有 meta 字段，只是不能修改。可以展示得美观些。
+- 目前目录树中，文件下面显示了 title, season, episode 等元信息摘要，能不能展示更多元信息，比如 分辨率，帧率，HDR，文件大小等（如果没获取到就不显示）
+
 r6. 解决目前特典导致的失败文件
 
 r5.5 TV 识别优化

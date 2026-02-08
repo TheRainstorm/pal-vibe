@@ -17,7 +17,7 @@
         [v-cloak] { display: none; }
     </style>
 </head>
-<body class="bg-gray-100 h-screen flex flex-col overflow-hidden">
+<body class="bg-gray-100 h-screen flex flex-col overflow-hidden select-none">
     <div id="app" class="flex flex-col h-full" v-cloak>
         <!-- Header -->
         <header class="bg-white shadow p-4 z-10 flex justify-between items-center shrink-0">
@@ -49,10 +49,21 @@
                         <div v-for="task in tasks" :key="task.id" 
                              @click="selectTask(task)"
                              :class="{'bg-blue-50 border-blue-500 shadow-sm': selectedTask?.id === task.id}"
-                             class="p-3 mb-2 cursor-pointer hover:bg-gray-50 rounded border-l-4 border-transparent transition-all">
-                            <div class="font-bold text-sm text-gray-700">{{ task.src }}</div>
-                            <div class="text-xs text-gray-400 truncate mt-1" :title="task.src">{{ (task.type || '').toUpperCase() }}</div>
-                            <button @click.stop="triggerScan(task.id)" class="mt-2 w-full text-[10px] bg-gray-100 hover:bg-gray-200 py-1 rounded font-bold text-gray-600 border border-gray-200 uppercase">Rescan</button>
+                             class="p-3 mb-2 cursor-pointer hover:bg-gray-50 rounded border-l-4 border-transparent transition-all group">
+                            <div class="font-bold text-sm text-gray-700 truncate" :title="task.src">{{ task.name || task.src }}</div>
+                            <div v-if="task.name" class="text-[10px] text-gray-400 truncate mb-1" :title="task.src">{{ task.src }}</div>
+                            
+                            <div class="flex flex-wrap gap-1 mt-2 text-[10px]">
+                                <span class="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600" title="Source Files">Src: {{ task.stats.src }}</span>
+                                <span class="bg-green-50 px-1.5 py-0.5 rounded text-green-600" title="Linked">L: {{ task.stats.dst }}</span>
+                                <span v-if="task.stats.error > 0" class="bg-red-50 px-1.5 py-0.5 rounded text-red-600 font-bold" title="Errors">E: {{ task.stats.error }}</span>
+                                <span v-if="task.stats.ignored > 0" class="bg-gray-50 px-1.5 py-0.5 rounded text-gray-400" title="Ignored">I: {{ task.stats.ignored }}</span>
+                            </div>
+                            
+                            <div class="flex justify-between items-center mt-2">
+                                <span class="text-[10px] text-gray-300 uppercase font-bold">{{ (task.type || '').toUpperCase() }}</span>
+                                <button @click.stop="triggerScan(task.id)" class="text-[10px] bg-white hover:bg-gray-100 px-2 py-0.5 rounded text-gray-500 border border-gray-200 uppercase opacity-0 group-hover:opacity-100 transition-opacity">Rescan</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -96,7 +107,7 @@
                     <div class="bg-red-50 border-t p-2 cursor-pointer hover:bg-red-100 flex justify-between items-center shrink-0"
                          @click="showErrorPanel = !showErrorPanel">
                         <span class="text-red-700 font-bold text-sm flex items-center gap-2 pl-2">
-                            <span>⚠️ Errors ({{ errorList.length }})</span>
+                            <span>⚠️ Errors ({{ filteredErrorList.length }})</span>
                         </span>
                         <span class="pr-2 text-xs text-gray-400">{{ showErrorPanel ? 'CLOSE' : 'OPEN' }}</span>
                     </div>
@@ -104,7 +115,7 @@
                     <div v-if="showErrorPanel" :style="{height: errorPanelHeight + 'px'}" class="bg-white border-t flex flex-col transition-all relative">
                         <div class="h-1 bg-gray-200 cursor-row-resize flex-shrink-0 hover:bg-gray-400" @mousedown="startResize"></div>
                         <div class="overflow-y-auto p-2 flex-1">
-                            <div v-for="file in errorList" :key="file.id"
+                            <div v-for="file in filteredErrorList" :key="file.id"
                                  @click="handleErrorClick(file, $event)"
                              :class="{'selected': selectedPaths.has(file.full_path), 'focused': focusedFile?.id === file.id}"
                              class="tree-node hover:bg-gray-50 text-red-600 group mb-0.5">
@@ -244,6 +255,16 @@
                                    class="w-full border border-gray-300 p-2.5 rounded text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                                    :class="{'bg-orange-50 border-orange-200': isMixed(field.key)}">
                         </div>
+
+                        <div v-if="readOnlyProps.length > 0" class="mt-6 border-t pt-4">
+                             <h3 class="font-bold text-gray-500 mb-3 text-xs uppercase tracking-wider">File Info</h3>
+                             <div class="grid grid-cols-2 gap-2 text-xs">
+                                 <div v-for="p in readOnlyProps" :key="p.key" class="bg-gray-50 p-2 rounded border border-gray-100">
+                                     <div class="text-gray-400 font-bold uppercase text-[9px]">{{ p.key }}</div>
+                                     <div class="text-gray-700 truncate font-mono mt-0.5" :title="String(p.value)">{{ formatValue(p.key, p.value) }}</div>
+                                 </div>
+                             </div>
+                        </div>
                     </div>
                 </div>
                 
@@ -254,6 +275,7 @@
                     </button>
                     <button @click="saveAndApply" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 w-full font-bold shadow-lg transition-all flex justify-center items-center gap-2">
                         <span>✓ Save & Apply</span>
+                        <span v-if="selectedPaths.size > 1" class="bg-blue-800 text-[10px] px-2 py-0.5 rounded-full">{{ selectedPaths.size }}</span>
                     </button>
                     <button @click="triggerReextract" class="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 w-full font-bold shadow-lg transition-all flex justify-center items-center gap-2">
                         <span>🔄 Reextract</span>
@@ -291,10 +313,14 @@
                         <span v-if="node.type === 'file' && isStaged(node.full_path)" class="ml-2 text-orange-500 text-xs" title="Staged changes">✏️</span>
                     </span>
                     
-                    <div v-if="node.type === 'file' && node.metadata && node.metadata.title" class="ml-4 flex items-center gap-1 text-[9px] font-bold opacity-40 group-hover:opacity-100 transition-opacity">
-                        <span class="text-blue-600 bg-blue-50 px-1 rounded">{{ node.metadata.title }}</span>
+                    <div v-if="node.type === 'file' && node.metadata" class="ml-4 flex items-center gap-1 text-[9px] font-bold opacity-40 group-hover:opacity-100 transition-opacity">
+                        <span v-if="node.metadata.title" class="text-blue-600 bg-blue-50 px-1 rounded">{{ node.metadata.title }}</span>
                         <span v-if="node.metadata.season !== undefined" class="text-emerald-700">S{{ String(node.metadata.season).padStart(2, '0') }}</span>
                         <span v-if="node.metadata.episode !== undefined" class="text-orange-700 border-l pl-1 border-gray-200">E{{ String(node.metadata.episode).padStart(2, '0') }}</span>
+                        <span v-if="node.metadata.height" class="bg-gray-100 px-1 rounded text-gray-500">{{ node.metadata.height }}p</span>
+                        <span v-if="node.metadata.hdr" class="bg-purple-100 text-purple-700 px-1 rounded">HDR</span>
+                        <span v-if="node.metadata.size && node.metadata.size > 1024*1024*1024" class="text-gray-400 pl-1">{{ (node.metadata.size/1024/1024/1024).toFixed(1) }}G</span>
+                        <span v-else-if="node.metadata.size" class="text-gray-400 pl-1">{{ (node.metadata.size/1024/1024).toFixed(0) }}M</span>
                     </div>
                 </div>
                 
@@ -358,6 +384,21 @@
                 const showErrorPanel = ref(false);
                 const errorPanelHeight = ref(300);
                 watch(showErrorPanel, (val) => { if(val) errorPanelHeight.value = window.innerHeight * 0.5; });
+
+                const filteredErrorList = computed(() => {
+                    if (!selectedTask.value) return errorList.value;
+                    return errorList.value.filter(e => e.source_root === selectedTask.value.src);
+                });
+
+                const readOnlyProps = computed(() => {
+                    if (!focusedFile.value || !focusedFile.value.metadata) return [];
+                    const editable = new Set(editableFields.value.map(f => f.key));
+                    // Also exclude internal fields if any, though metadata usually is clean
+                    return Object.entries(focusedFile.value.metadata)
+                        .filter(([k, v]) => !editable.has(k) && k !== 'ignore')
+                        .sort((a, b) => a[0].localeCompare(b[0]))
+                        .map(([k, v]) => ({ key: k, value: v }));
+                });
 
                 const focusedFile = ref(null);
                 const selectedPaths = ref(new Set());
@@ -722,7 +763,26 @@
                     return seasons;
                 };
 
-                onMounted(() => { fetchStats(); fetchTasks(); fetchErrors(); fetchDstTree(); });
+                const formatValue = (key, val) => {
+                    if (key === 'size' && typeof val === 'number') {
+                        if (val > 1024*1024*1024) return (val / (1024*1024*1024)).toFixed(2) + ' GB';
+                        return (val / (1024*1024)).toFixed(1) + ' MB';
+                    }
+                    if (val === true) return 'Yes';
+                    if (val === false) return 'No';
+                    return val;
+                };
+
+                onMounted(async () => { 
+                    await fetchStats(); 
+                    await fetchTasks(); 
+                    await fetchErrors(); 
+                    await fetchDstTree();
+                    if (tasks.value.length > 0) {
+                        selectTask(tasks.value[0]);
+                    }
+                });
+                
                 watch(viewMode, () => { clearSelection(); fetchDstTree(); });
 
                 return {
@@ -731,7 +791,8 @@
                     stagedChanges, showStagingPanel, errorPanelHeight, editableFields, sortBy, sortOrder, refreshTree,
                     selectTask, triggerScan, reloadAll, handleSelection, closeEditor, save,
                     expandAll, collapseAll, saveToStage, saveAndApply, discardChanges, triggerReextract,
-                    applySequence, isMixed, isTVSeries, groupEpisodes, clearSelection, startResize, handleErrorClick
+                    applySequence, isMixed, isTVSeries, groupEpisodes, clearSelection, startResize, handleErrorClick,
+                    filteredErrorList, readOnlyProps, formatValue
                 };
             }
         }).mount('#app');

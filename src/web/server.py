@@ -45,12 +45,20 @@ class AppState:
 state = AppState()
 
 # --- Models ---
+class TaskStats(BaseModel):
+    src: int = 0
+    dst: int = 0
+    error: int = 0
+    ignored: int = 0
+
 class TaskInfo(BaseModel):
     id: int
+    name: Optional[str] = None
     src: str
     dst: str
     type: str
     db: str
+    stats: TaskStats = TaskStats()
 
 class FileNode(BaseModel):
     id: str
@@ -64,6 +72,7 @@ class FileNode(BaseModel):
     status: Optional[str] = None # 'linked', 'missing', 'error', 'scanned'
     # Extra for DST view
     source_path: Optional[str] = None
+    source_root: Optional[str] = None
     added_at: Optional[float] = None
 
 class StatsResponse(BaseModel):
@@ -291,12 +300,31 @@ async def reload_all():
 async def get_tasks():
     res = []
     for i, t in enumerate(state.tasks):
+        src_root = t.get("src")
+        db_path = t.get("db", "pal_database.yaml")
+        db = state.db_cache.get(os.path.normpath(db_path))
+        
+        stats = TaskStats()
+        if db and src_root:
+            files = db.get_files_by_source_root(src_root)
+            stats.src = len(files)
+            for f in files:
+                entry = db.get_video_entry(src_root, f)
+                if entry:
+                    if entry.get("error"): stats.error += 1
+                    meta = entry.get("metadata")
+                    if meta and meta.get("ignore"): stats.ignored += 1
+                    elif entry.get("target_path") and os.path.exists(entry["target_path"]):
+                        stats.dst += 1
+
         res.append(TaskInfo(
             id=i,
+            name=t.get("name"),
             src=t.get("src", ""),
             dst=t.get("dst", ""),
             type=str(t.get("type", "")),
-            db=t.get("db", "pal_database.yaml")
+            db=t.get("db", "pal_database.yaml"),
+            stats=stats
         ))
     return res
 
@@ -391,7 +419,8 @@ async def get_errors():
                         type='file',
                         metadata=entry.get("metadata"),
                         error=entry.get("error"),
-                        status="error"
+                        status="error",
+                        source_root=src_root
                     ))
     return errors
 
