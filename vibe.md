@@ -384,6 +384,10 @@ r5.4 webui 交互
 
 - 添加 reextract 按钮，支持多选文件后，重新扫描元数据
 
+- 多选批量修改，save 后，应该清除当前选择
+- 点击 Errors tab 自动展开时，应该默认展开 80% 高度，并且可以拖动修改高度
+- 点击 Errors tab 中的文件时，，Source view 的目录树应该自动展开定位到该文件
+
 r5.3. metadata 增加其它元数据
 
 - metadata 增加添加到数据库的时间戳

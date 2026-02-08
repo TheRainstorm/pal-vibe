@@ -92,9 +92,11 @@
                         <span class="pr-2 text-xs text-gray-400">{{ showErrorPanel ? 'CLOSE' : 'OPEN' }}</span>
                     </div>
 
-                    <div v-if="showErrorPanel" class="h-64 bg-white border-t overflow-y-auto p-2 transition-all">
-                        <div v-for="file in errorList" :key="file.id"
-                             @click="handleSelection({node: file, event: $event})"
+                    <div v-if="showErrorPanel" :style="{height: errorPanelHeight + 'px'}" class="bg-white border-t flex flex-col transition-all relative">
+                        <div class="h-1 bg-gray-200 cursor-row-resize flex-shrink-0 hover:bg-gray-400" @mousedown="startResize"></div>
+                        <div class="overflow-y-auto p-2 flex-1">
+                            <div v-for="file in errorList" :key="file.id"
+                                 @click="handleErrorClick(file, $event)"
                              :class="{'selected': selectedPaths.has(file.full_path), 'focused': focusedFile?.id === file.id}"
                              class="tree-node hover:bg-gray-50 text-red-600 group mb-0.5">
                             <input type="checkbox"
@@ -107,6 +109,7 @@
                             </div>
                         </div>
                     </div>
+                </div>
 
                     <!-- Staging Panel -->
                     <div class="bg-orange-50 border-t p-2 cursor-pointer hover:bg-orange-100 flex justify-between items-center shrink-0"
@@ -260,7 +263,7 @@
     <template id="file-tree-template">
         <ul class="pl-2">
             <li v-for="node in nodes" :key="node.id">
-                <div class="tree-node group mb-0.5" 
+                <div :id="'node-' + node.id" class="tree-node group mb-0.5" 
                      :class="{'focused': focusedId === node.id, 'selected': isSelected(node.full_path)}"
                      @click.stop="handleClick(node, $event)">
                     
@@ -347,6 +350,8 @@
                 const dstFileTree = ref([]);
                 const errorList = ref([]);
                 const showErrorPanel = ref(false);
+                const errorPanelHeight = ref(300);
+                watch(showErrorPanel, (val) => { if(val) errorPanelHeight.value = window.innerHeight * 0.5; });
 
                 const focusedFile = ref(null);
                 const selectedPaths = ref(new Set());
@@ -492,6 +497,54 @@
                     collapse(srcFileTree.value);
                 };
 
+                 const startResize = (e) => {
+                    const startY = e.clientY;
+                    const startH = errorPanelHeight.value;
+                    const onMove = (e) => {
+                         const delta = startY - e.clientY;
+                         errorPanelHeight.value = Math.max(100, Math.min(window.innerHeight - 100, startH + delta));
+                    };
+                    const onUp = () => {
+                        window.removeEventListener('mousemove', onMove);
+                        window.removeEventListener('mouseup', onUp);
+                    };
+                    window.addEventListener('mousemove', onMove);
+                    window.addEventListener('mouseup', onUp);
+                };
+
+                const handleErrorClick = async (file, event) => {
+                    handleSelection({node: file, event, isCheckbox: false});
+
+                    if (file.source_root && (!selectedTask.value || selectedTask.value.src !== file.source_root)) {
+                        const task = tasks.value.find(t => t.src === file.source_root);
+                        if (task) {
+                            await selectTask(task);
+                        }
+                    }
+
+                    const targetPath = file.full_path;
+                    const findAndExpand = (nodes) => {
+                        for(const node of nodes) {
+                            if (node.full_path === targetPath) return [node];
+                            if (node.children) {
+                                const path = findAndExpand(node.children);
+                                if (path) {
+                                    node.isOpen = true;
+                                    return [node, ...path];
+                                }
+                            }
+                        }
+                        return null;
+                    };
+                    
+                    const pathChain = findAndExpand(srcFileTree.value);
+
+                    setTimeout(() => {
+                        const el = document.getElementById('node-' + file.id);
+                        if (el) el.scrollIntoView({block: 'center', behavior: 'smooth'});
+                    }, 200);
+                };
+
                  const saveToStage = () => {
                     let targets = [];
                     if (selectedPaths.value.size > 0) {
@@ -521,6 +574,9 @@
                         if (isSequencePending.value) newMeta.episode = seqStart.value + idx;
                         stagedChanges.value.set(path, newMeta);
                     });
+                    
+                    clearSelection();
+                    closeEditor();
                 };
 
                 const commitChanges = async () => {
@@ -649,10 +705,10 @@
                 return {
                     viewMode, stats, tasks, selectedTask, srcFileTree, dstFileTree, errorList, showErrorPanel,
                     focusedFile, selectedPaths, editMetadata, batchPlaceholders, seqStart, isSequencePending,
-                    stagedChanges, showStagingPanel,
+                    stagedChanges, showStagingPanel, errorPanelHeight,
                     selectTask, triggerScan, reloadAll, handleSelection, closeEditor, save,
                     expandAll, collapseAll, saveToStage, saveAndApply, discardChanges, triggerReextract,
-                    applySequence, isMixed, isTVSeries, groupEpisodes, clearSelection
+                    applySequence, isMixed, isTVSeries, groupEpisodes, clearSelection, startResize, handleErrorClick
                 };
             }
         }).mount('#app');
