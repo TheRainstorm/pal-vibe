@@ -13,7 +13,7 @@
         .grid-episode { @apply w-10 h-10 flex items-center justify-center border rounded cursor-pointer hover:bg-blue-100 text-sm font-bold; }
         .grid-episode.missing { @apply border-red-300 bg-red-50 text-red-600; }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
-        input[type="checkbox"] { @apply cursor-pointer w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 mr-2; }
+        input[type="checkbox"] { @apply cursor-pointer w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 shrink-0 mr-1.5; }
         [v-cloak] { display: none; }
     </style>
 </head>
@@ -227,13 +227,12 @@
                 </div>
                 
                 <div class="p-4 border-t bg-gray-50 flex flex-col gap-2">
-                    <button @click="save" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 w-full font-bold shadow-lg transition-all flex justify-center items-center gap-2">
-                        <span>✏️ Save (Stage)</span>
+                    <button @click="saveToStage" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 w-full font-bold shadow-lg transition-all flex justify-center items-center gap-2">
+                        <span>✏️ Save</span>
                         <span v-if="selectedPaths.size > 1" class="bg-blue-800 text-[10px] px-2 py-0.5 rounded-full">{{ selectedPaths.size }}</span>
                     </button>
-                    <button @click="commitChanges" :disabled="stagedChanges.size === 0" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 w-full font-bold shadow-lg transition-all flex justify-center items-center gap-2" :class="{'opacity-50 cursor-not-allowed': stagedChanges.size === 0}">
-                        <span>✓ Apply (Commit)</span>
-                        <span class="bg-green-800 text-[10px] px-2 py-0.5 rounded-full">{{ stagedChanges.size }}</span>
+                    <button @click="saveAndApply" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 w-full font-bold shadow-lg transition-all flex justify-center items-center gap-2">
+                        <span>✓ Save & Apply</span>
                     </button>
                 </div>
             </div>
@@ -262,8 +261,8 @@
                         <span v-else>⚪</span>
                     </span>
 
-                    <span class="truncate flex-1 flex items-center" :class="{'text-red-600': node.status === 'error', 'font-bold text-gray-800': node.type === 'folder', 'text-gray-600': node.type === 'file'}">
-                        <span>{{ node.name }}</span>
+                    <span class="truncate flex-1" :class="{'text-red-600': node.status === 'error', 'font-bold text-gray-800': node.type === 'folder', 'text-gray-600': node.type === 'file'}">
+                        {{ node.name }}
                         <span v-if="node.type === 'file' && isStaged(node.full_path)" class="ml-2 text-orange-500 text-xs" title="Staged changes">✏️</span>
                     </span>
                     
@@ -498,15 +497,13 @@
                         if (isSequencePending.value) newMeta.episode = seqStart.value + idx;
                         stagedChanges.value.set(path, newMeta);
                     });
-                    alert(`Staged ${targets.length} file(s) for commit`);
                 };
 
                 const commitChanges = async () => {
                     if (stagedChanges.value.size === 0) {
-                        alert("No staged changes to commit");
-                        return;
+                        return false;
                     }
-                    if (!confirm(`Commit ${stagedChanges.value.size} staged change(s)?`)) return;
+                    if (!confirm(`Commit ${stagedChanges.value.size} staged change(s)?`)) return false;
 
                     const updates = [];
                     for (const [path, metadata] of stagedChanges.value.entries()) {
@@ -524,10 +521,20 @@
                     });
 
                     if (res.ok) {
-                        alert("Commit Complete!");
                         stagedChanges.value.clear();
                         if (selectedTask.value) await selectTask(selectedTask.value);
-                        fetchStats(); fetchErrors(); fetchDstTree(); clearSelection(); closeEditor();
+                        fetchStats(); fetchErrors(); fetchDstTree();
+                        return true;
+                    }
+                    return false;
+                };
+
+                const saveAndApply = async () => {
+                    saveToStage();
+                    const committed = await commitChanges();
+                    if (committed) {
+                        alert("Save & Apply Complete!");
+                        clearSelection(); closeEditor();
                     }
                 };
 
@@ -584,7 +591,7 @@
                     focusedFile, selectedPaths, editMetadata, batchPlaceholders, seqStart, isSequencePending,
                     stagedChanges, showStagingPanel,
                     selectTask, triggerScan, reloadAll, handleSelection, closeEditor, save,
-                    expandAll, collapseAll, saveToStage, commitChanges, discardChanges,
+                    expandAll, collapseAll, saveToStage, saveAndApply, discardChanges,
                     applySequence, isMixed, isTVSeries, groupEpisodes, clearSelection
                 };
             }
