@@ -80,7 +80,7 @@ class TVPlugin(BaseVideoPlugin):
         return have_fixed
 
     def calculate_hash(self, metadata):
-        hash_data = {k: v for k, v in metadata.items() if k in ['title', 'season', 'episode', 'type']}
+        hash_data = {k: v for k, v in metadata.items() if k in ['title', 'season', 'episode', 'type', 'ignore']}
         return hashlib.sha256(json.dumps(hash_data, sort_keys=True).encode('utf-8')).hexdigest()
 
     def generate_target_path(self, metadata, filepath):

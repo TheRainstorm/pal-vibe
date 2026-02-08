@@ -35,7 +35,7 @@ class WebDLPlugin(BaseVideoPlugin):
         return prompt
 
     def calculate_hash(self, metadata):
-        hash_data = {k: v for k, v in metadata.items() if k in ['title', 'year', 'type']}
+        hash_data = {k: v for k, v in metadata.items() if k in ['title', 'year', 'type', 'ignore']}
         return hashlib.sha256(json.dumps(hash_data, sort_keys=True).encode('utf-8')).hexdigest()
 
     def generate_target_path(self, metadata, filepath):

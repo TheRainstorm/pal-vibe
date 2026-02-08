@@ -286,6 +286,16 @@ class BaseVideoPlugin:
             # Hash Mismatch -> User Edited DB manually. Trust User.
             logger.info(f"Metadata changed (corrected by human), re-processing: {filepath}")
             
+            # check ignore state 
+            if final_metadata.get("ignore"):
+                logger.info(f"File marked as ignored: {filepath}")
+                old_target = db_entry.get("target_path")
+                if old_target:
+                    logger.info(f"Removing old link due to invalid metadata: {old_target}")
+                    remove_link_and_empty_dirs(old_target)
+                    self.db.update_video_entry(source_root, dst_root, filepath, final_metadata, None, current_db_hash)
+                return
+            
             is_valid, error_reason = self._validate_metadata(final_metadata)
             if not is_valid:
                 logger.warning(f"Meta after edit is invalid: {error_reason}")

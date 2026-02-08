@@ -2,6 +2,8 @@
 
 Pal（parse-and-link） 是一个强大的媒体文件整理工具，旨在实现电影和电视剧文件的自动化管理。它能扫描杂乱的源目录，从文件名提取标题、年份和集数等元数据，并在目标目录生成结构化的软/硬链接，从而大幅提高 Jellyfin/Plex/Emby 等媒体服务器刮削的准确率。
 
+本项目是对 [TheRainstorm/parse-and-link](https://github.com/TheRainstorm/parse-and-link) 的重构和扩展，是对 vibe coding 的一次实践尝试，主要使用的工具是 Gemini-Cli（Gemini3） 和 Opencode（glm-4.7）。
+
 ## 🚀 核心特性
 
 *   **非侵入式**: 仅在目标目录生成链接（Symlink/Hardlink），**不用修改或移动源文件**，对于 BT/PT 做种友好。
